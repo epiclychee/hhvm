@@ -30,9 +30,7 @@ ExternalProject_add(
   bundled_folly
   SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/src/
   BUILD_ALWAYS ON
-  PATCH_COMMAND
-    "${CMAKE_CURRENT_SOURCE_DIR}/../apply-quilt-patches.sh"
-    "${CMAKE_CURRENT_SOURCE_DIR}/patches"
+  PATCH_COMMAND ""
   LIST_SEPARATOR "!!"
   CMAKE_ARGS
     -DCMAKE_CXX_STANDARD=${CMAKE_CXX_STANDARD}

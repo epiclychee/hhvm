@@ -15,12 +15,13 @@
 */
 #pragma once
 
-#if defined(__x86_64__)
+#if defined(__x86_64__) && defined(HHVM_USE_XED)
 extern "C" {
 #include <xed-interface.h>
 }
 #endif // __x86_64__
 
+#include <cstdint>
 #include <ostream>
 
 namespace HPHP {
@@ -88,7 +89,7 @@ struct Disasm {
 
   static void ExcludedAddressRange(void* low, size_t len);
  private:
-#if defined(__x86_64__)
+#if defined(__x86_64__) && defined(HHVM_USE_XED)
   xed_state_t m_xedState;
 #endif // __x86_64__
   const Options m_opts;

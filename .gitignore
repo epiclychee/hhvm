@@ -104,3 +104,17 @@ CPackSourceConfig.cmake
 
 # clangd JSON Compilation Database
 compile_commands.json
+codex-progress.log
+
+# Locally generated config/codegen outputs
+/hphp/ext_hsl_systemlib.hack
+/hphp/hack/src/hackc/opcodes.rs
+/hphp/runtime/base/configs/*-loader.cpp
+/hphp/runtime/base/configs/*-loader.h
+/hphp/runtime/base/configs/configs-generated.cpp
+/hphp/runtime/base/configs/repo-global-data-generated.h
+/hphp/runtime/base/configs/repo-options-flags-generated.h
+/hphp/runtime/base/configs/unit-cache-generated.h
+/hphp/tools/configs/.cargo/
+/hphp/tools/configs/target/
+/hphp/util/configs/

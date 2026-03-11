@@ -1,10 +1,9 @@
-#![feature(exit_status_error)]
-
 /// This file is used to build gen-rust.exe which we then use to build opcodes.rs
 use std::env;
 use std::path::PathBuf;
 use std::process::Command;
 
+use anyhow::bail;
 use anyhow::Result;
 
 fn main() -> Result<()> {
@@ -21,7 +20,10 @@ fn main() -> Result<()> {
     cmd.arg("gen-rust.cpp");
     cmd.arg("-o");
     cmd.arg(&gen_rust_exe);
-    cmd.spawn()?.wait()?.exit_ok()?;
+    let status = cmd.spawn()?.wait()?;
+    if !status.success() {
+        bail!("failed to compile gen-rust.cpp: {status}");
+    }
 
     // Now that we have gen-rust.exe use it to generate opcodes.rs.
     let opcodes_out = Command::new(&gen_rust_exe).output()?;

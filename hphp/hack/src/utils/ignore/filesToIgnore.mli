@@ -36,6 +36,10 @@ type watch_spec = {
       (** Includes files based on their extension. Example "php" *)
   include_file_names: string list;
       (** Includes files based on their full name. Example: "PACKAGES.toml" *)
+  exclude_directories: string list;
+      (** Excludes files under these project-relative directory prefixes. *)
+  exclude_vcs_directories: bool;
+      (** Excludes files under version control metadata directories. *)
 }
 
 val server_watch_spec : watch_spec

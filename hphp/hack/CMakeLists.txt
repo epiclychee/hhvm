@@ -127,6 +127,11 @@ else()
   set(PROFILE "release")
 endif()
 
+set(RUST_ENV_DEPS rustc cargo)
+if (NOT SKIP_OPAM)
+  list(APPEND RUST_ENV_DEPS opam_setup)
+endif()
+
 set(RUST_OPCODES_DIR "${CMAKE_BINARY_DIR}/hphp/hack/src/hackc")
 set(RUST_OPCODES "${RUST_OPCODES_DIR}/opcodes.rs")
 
@@ -162,9 +167,9 @@ set(NAMING_SPECIAL_NAMES_SRCS
    "${NAMING_SPECIAL_NAMES_PREFIX}/naming_special_names_ffi_cbindgen.rs"
 )
 
-set(FFI_PREFIX "${CMAKE_CURRENT_SOURCE_DIR}/src/utils/ffi")
+set(FFI_PREFIX "${CMAKE_CURRENT_SOURCE_DIR}/src/hackc/ffi")
 set(FFI_SRCS
-   "${FFI_PREFIX}/ffi.rs"
+   "${FFI_PREFIX}/lib.rs"
    "${FFI_PREFIX}/ffi_ffi_cbindgen.rs"
 )
 
@@ -177,17 +182,17 @@ add_custom_command(
     ${INVOKE_CARGO} dump-opcodes dump-opcodes --bin dump_opcodes
       -o "${RUST_OPCODES}"
   COMMENT "Generating Rust opcode struct for cbindgen to use to generate hhbc-unit.h"
-  DEPENDS "${OPCODE_DATA}"
+  DEPENDS ${RUST_ENV_DEPS} "${OPCODE_DATA}"
 )
 
 set(HHBC_AST_HEADER "${RUST_FFI_BUILD_ROOT}/hphp/hack/src/hackc/hhbc-unit.h")
-set(FFI_HEADER "${RUST_FFI_BUILD_ROOT}/hphp/hack/src/utils/ffi.h")
+set(FFI_HEADER "${RUST_FFI_BUILD_ROOT}/hphp/hack/src/hackc/ffi.h")
 set(NAMING_SPECIAL_NAMES_HEADER "${RUST_FFI_BUILD_ROOT}/hphp/hack/src/naming/naming-special-names.h")
 set(TYPE_CONSTRAINT_HEADER "${CMAKE_SOURCE_DIR}/hphp/runtime/vm/type-constraint-flags.h")
 set(FCALL_HEADER "${CMAKE_SOURCE_DIR}/hphp/runtime/vm/fcall-args-flags.h")
 set(HHBC_HEADER "${CMAKE_SOURCE_DIR}/hphp/runtime/vm/hhbc-shared.h")
 set(ATTR_HEADER "${CMAKE_SOURCE_DIR}/hphp/runtime/base/attr.h")
-set(FFI_EXTRA_HEADER "${CMAKE_SOURCE_DIR}/hphp/hack/src/utils/ffi/ffi_extra.h")
+set(FFI_EXTRA_HEADER "${CMAKE_SOURCE_DIR}/hphp/hack/src/hackc/ffi/ffi_extra.h")
 
 add_custom_command(
   OUTPUT ${HHBC_AST_HEADER}
@@ -205,7 +210,7 @@ add_custom_command(
       --header "${HHBC_AST_HEADER}" --namespaces "HPHP,hackc,hhbc"
       --includes "${FFI_HEADER},${NAMING_SPECIAL_NAMES_HEADER},${TYPE_CONSTRAINT_HEADER},${ATTR_HEADER},${FCALL_HEADER},${HHBC_HEADER}"
       ${HHBC_AST_SRCS}
-  DEPENDS rustc cargo "${RUST_OPCODES}"
+  DEPENDS ${RUST_ENV_DEPS} "${RUST_OPCODES}"
   COMMENT "Generating hhbc-unit.h"
 )
 
@@ -275,7 +280,7 @@ function(build_cxx_bridge NAME)
         ${CMAKE_COMMAND} -E copy "${GENERATED}.rs.cc" "${RUST_PART_CXX}" &&
         ${CMAKE_COMMAND} -E copy "${GENERATED}.rs.h" "${RUST_PART_HEADER}"
       WORKING_DIRECTORY ${FFI_BRIDGE_SRC}
-      DEPENDS rustc cargo "${OPCODE_DATA}"
+      DEPENDS ${RUST_ENV_DEPS} "${OPCODE_DATA}"
   )
   add_custom_target(
     "${NAME}_cxx"

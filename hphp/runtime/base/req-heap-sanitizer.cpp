@@ -20,12 +20,12 @@
 #include "hphp/runtime/base/request-info.h"
 #include "hphp/util/stack-trace.h"
 
-#ifdef __x86_64__
+#if defined(__x86_64__) && defined(HHVM_USE_XED)
 #include "hphp/util/asm-x64.h"
 #endif
 
 extern "C" {
-#if defined(__x86_64__)
+#if defined(__x86_64__) && defined(HHVM_USE_XED)
 #include <xed-interface.h>
 #endif
 }
@@ -72,7 +72,7 @@ void HeapObjectSanitizer::free(void* ptr) {
 }
 
 uint8_t* HeapObjectSanitizer::find_next_inst(uint8_t* ip) {
-#if defined(__x86_64__)
+#if defined(__x86_64__) && defined(HHVM_USE_XED)
   xed_machine_mode_enum_t mmode = XED_MACHINE_MODE_LONG_64;
   xed_address_width_enum_t stack_addr_width = XED_ADDRESS_WIDTH_64b;
   xed_decoded_inst_t xedd{};
@@ -144,7 +144,7 @@ void HeapObjectSanitizer::install_signal_handler() {
   sigaction(SIGSEGV, &sa, &oldHandler);
 }
 
-#ifdef __x86_64__
+#if defined(__x86_64__) && defined(HHVM_USE_XED)
 void
 HeapObjectSanitizer::access_handler(int signo, siginfo_t* info, void* extra) {
   auto ctx = (ucontext_t *)extra;
@@ -291,10 +291,10 @@ HeapObjectSanitizer::access_handler(int signo, siginfo_t* info, void* extra) {
   signal(signo, SIG_DFL);
   raise(signo);
 }
-#else // __x86_64__
+#else // __x86_64__ && HHVM_USE_XED
 void HeapObjectSanitizer::access_handler(int, siginfo_t*, void*) {
   assertx(false && "port me");
 }
-#endif // __x86_64__
+#endif // __x86_64__ && HHVM_USE_XED
 
 }

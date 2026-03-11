@@ -29,7 +29,7 @@ namespace HPHP {
 
 static uintptr_t excludeLow, excludeLen;
 
-#if defined(__x86_64__)
+#if defined(__x86_64__) && defined(HHVM_USE_XED)
 
 // XED callback function to get a symbol from an address
 static int addressToSymbol(xed_uint64_t address, char* symbolBuffer,
@@ -46,7 +46,7 @@ static int addressToSymbol(xed_uint64_t address, char* symbolBuffer,
   *offset = 0;
   return 1;
 }
-#endif /* __x86_64__ */
+#endif /* __x86_64__ && HHVM_USE_XED */
 
 
 
@@ -58,25 +58,25 @@ void Disasm::ExcludedAddressRange(void* low, size_t len) {
 Disasm::Disasm(const Disasm::Options& opts)
     : m_opts(opts)
 {
-#if defined(__x86_64__)
+#if defined(__x86_64__) && defined(HHVM_USE_XED)
   xed_state_init(&m_xedState, XED_MACHINE_MODE_LONG_64,
                  XED_ADDRESS_WIDTH_64b, XED_ADDRESS_WIDTH_64b);
   xed_tables_init();
 #endif // __x86_64__
 }
 
-#if defined(__x86_64__)
+#if defined(__x86_64__) && defined(HHVM_USE_XED)
 
 #define MAX_INSTR_ASM_LEN 128
 
 static const xed_syntax_enum_t s_xed_syntax =
   getenv("HHVM_INTEL_DISAS") ? XED_SYNTAX_INTEL : XED_SYNTAX_ATT;
-#endif // __x86_64__
+#endif // __x86_64__ && HHVM_USE_XED
 
 void Disasm::disasm(std::ostream& out, uint8_t* codeStartAddr,
                     uint8_t* codeEndAddr, uint64_t adjust) {
 
-#if defined(__x86_64__)
+#if defined(__x86_64__) && defined(HHVM_USE_XED)
   auto const endClr = m_opts.m_color.empty() ? "" : ANSI_COLOR_END;
   char codeStr[MAX_INSTR_ASM_LEN];
   xed_uint8_t *frontier;
@@ -152,6 +152,21 @@ void Disasm::disasm(std::ostream& out, uint8_t* codeStartAddr,
 #else
   out << "This binary was compiled without disassembly support\n";
 #endif // __x86_64__
+
+  for (auto addr = codeStartAddr; addr < codeEndAddr; ) {
+    for (int i = 0; i < m_opts.m_indentLevel; ++i) {
+      out << ' ';
+    }
+    if (m_opts.m_addresses) {
+      const char* fmt = m_opts.m_relativeOffset ? "{:3x}: " : "{:#10x}: ";
+      auto const shown = m_opts.m_relativeOffset
+        ? static_cast<uint64_t>(addr - codeStartAddr)
+        : static_cast<uint64_t>(reinterpret_cast<uintptr_t>(addr) - adjust);
+      out << folly::format(fmt, shown);
+    }
+    out << "<disassembly unavailable: built without XED>\n";
+    break;
+  }
 }
 
 } // namespace HPHP

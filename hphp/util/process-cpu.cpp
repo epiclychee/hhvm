@@ -16,7 +16,9 @@
 
 #include "hphp/util/process-cpu.h"
 
+#if !defined(NO_HHVM) && !defined(NO_FOLLY)
 #include <folly/system/HardwareConcurrency.h>
+#endif
 
 #include <cassert>
 #include <cstring>
@@ -31,7 +33,12 @@ namespace HPHP {
 ///////////////////////////////////////////////////////////////////////////////
 
 int Process::GetCPUCount() {
+#if !defined(NO_HHVM) && !defined(NO_FOLLY)
   return folly::available_concurrency();
+#else
+  auto const concurrency = std::thread::hardware_concurrency();
+  return concurrency == 0 ? 1 : static_cast<int>(concurrency);
+#endif
 }
 
 #ifdef __x86_64__

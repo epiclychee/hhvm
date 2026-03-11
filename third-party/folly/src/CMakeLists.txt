@@ -277,8 +277,6 @@ if(TARGET folly_testing_test_util)
   )
 endif()
 
-set(FOLLY_INSTALL_TARGETS folly folly_deps)
-
 # Test utilities exported for use by downstream projects
 add_library(folly_test_util
   ${FOLLY_DIR}/test/DeterministicSchedule.cpp
@@ -294,22 +292,30 @@ target_link_libraries(folly_test_util
     ${LIBGMOCK_LIBRARIES}
 )
 apply_folly_compile_options_to_target(folly_test_util)
-list(APPEND FOLLY_INSTALL_TARGETS folly_test_util)
-
-install(TARGETS ${FOLLY_INSTALL_TARGETS}
+install(TARGETS folly folly_deps
   EXPORT folly
+  COMPONENT lib
   RUNTIME DESTINATION bin
   LIBRARY DESTINATION ${LIB_INSTALL_DIR}
   ARCHIVE DESTINATION ${LIB_INSTALL_DIR})
-
-auto_install_files(folly ${FOLLY_DIR}
-  ${hfiles}
-)
+install(TARGETS folly_test_util
+  EXPORT folly_test_util
+  COMPONENT test_util
+  RUNTIME DESTINATION bin
+  LIBRARY DESTINATION ${LIB_INSTALL_DIR}
+  ARCHIVE DESTINATION ${LIB_INSTALL_DIR})
 install(
   FILES ${CMAKE_CURRENT_BINARY_DIR}/folly/folly-config.h
   DESTINATION ${INCLUDE_INSTALL_DIR}/folly
-  COMPONENT dev
-)
+  COMPONENT dev)
+foreach(HEADER ${hfiles})
+  string(REPLACE "${FOLLY_DIR}" "${INCLUDE_INSTALL_DIR}/folly" DEST "${HEADER}")
+  get_filename_component(DEST "${DEST}" DIRECTORY)
+  install(
+    FILES "${HEADER}"
+    DESTINATION "${DEST}"
+    COMPONENT dev)
+endforeach()
 
 # Generate the folly-config.cmake file for installation so that
 # downstream projects that use on folly can easily depend on it in their CMake

@@ -11,8 +11,10 @@ ExternalProject_Add(
   EXCLUDE_FROM_ALL
   SOURCE_DIR "${TBB_ROOT}"
   CONFIGURE_COMMAND ""
-  PATCH_COMMAND
-    patch -p4 < "${CMAKE_CURRENT_SOURCE_DIR}/pic_compile.patch"
+  # HHVM vendors the PIC fix directly in third-party/tbb/src, so the
+  # ExternalProject patch step would only make reruns fail on an already
+  # patched tree.
+  PATCH_COMMAND ""
   BUILD_COMMAND
     # We only depend on TBB so we only build this target.
     cd <SOURCE_DIR> && make

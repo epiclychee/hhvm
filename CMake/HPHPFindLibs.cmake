@@ -51,6 +51,7 @@ set(CMAKE_REQUIRED_LIBRARIES)
 
 # libXed
 if (ENABLE_XED)
+  add_definitions("-DHHVM_USE_XED=1")
   find_package(LibXed)
   if (LibXed_FOUND)
     include_directories(${LibXed_INCLUDE_DIR})

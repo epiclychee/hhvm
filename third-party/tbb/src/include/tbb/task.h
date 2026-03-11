@@ -263,7 +263,7 @@ namespace internal {
         tbb::task* next;
 
         //! The task corresponding to this task_prefix.
-        tbb::task& task() {return *reinterpret_cast<tbb::task*>(this+1);}
+        tbb::task& task_ref() {return *reinterpret_cast<tbb::task*>(this+1);}
     };
 
 } // namespace internal

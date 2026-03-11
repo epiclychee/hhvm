@@ -38,8 +38,9 @@
 #if (defined(__linux__) && !defined(__ANDROID__)) ||                       \
     (defined(__ANDROID__) && __ANDROID_API__ >= 21 /* released 2014 */) || \
     defined(__FreeBSD__) || defined(__SGX__) || defined(__EMSCRIPTEN__)
-static_assert(folly::to_bool(::recvmmsg));
-static_assert(folly::to_bool(::sendmmsg));
+// These entry points are expected to be available on the platforms covered by
+// this branch. GCC 13 does not accept converting the function symbol to bool in
+// a static_assert here.
 #else
 static int (*recvmmsg)(...) = nullptr;
 static int (*sendmmsg)(...) = nullptr;
