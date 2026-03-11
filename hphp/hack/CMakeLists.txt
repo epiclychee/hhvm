@@ -225,6 +225,8 @@ HHVM_RENDER_CONFIG_SPECIFICATION(
   OUTPUT_PATH "${CMAKE_BINARY_DIR}/hphp/hack/src/hackc/compile"
 )
 
+add_custom_target(hack_rust_ffi_bridge_targets)
+
 # Compiling cxx entrypoints for hhvm
 #
 # Usage:
