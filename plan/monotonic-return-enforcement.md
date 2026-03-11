@@ -20,7 +20,9 @@ This plan assumes the current codebase reality established during investigation:
 - Existing return verification for direct declarations is largely driven by emitted `RetC` / `RetM` `VerifyRetKind` plus `VerifyRetTypeTS`.
 - Runtime, JIT, and HHBBC already iterate `Func::returnTypeConstraints()` when they decide to perform return verification.
 - The current tree appears not to have a live `CheckReturnTypeHints` / `HardReturnTypeHints` implementation, so the new monotonic-return mode must be added as real config plumbing.
-- Reflection already distinguishes direct declarations from inherited type constraints via `TypeConstraintFlags::Inherited` and `firstNonInheritedType()`.
+- Unannotated methods already carry an empty / top `TypeIntersectionConstraint`, so “no direct declaration” is already representable today. The real representation constraint is different: if we build a non-empty effective constraint set containing only inherited entries, existing helper paths such as `firstNonInheritedType()` and reflection assumptions need an explicit design update.
+- `SharedData` represents source-declared function metadata and should remain the source-of-truth for direct declarations. Effective monotonic inherited enforcement metadata must therefore live alongside `Func`, not by mutating or copying `SharedData`.
+- Reflection currently uses `firstNonInheritedType()` for declared return-type presentation, but `TypeConstraintFlags::Inherited` is not yet an established producer/consumer contract for runtime-effective return enforcement.
 
 ## Definitions
 
@@ -49,54 +51,55 @@ This plan assumes the current codebase reality established during investigation:
    - A live `Cfg::...` integer field visible in runtime/JIT/HHBBC.
    - Repo-global-data serialization for repo-authoritative mode.
 
-2. Add explicit runtime metadata fields for effective monotonic return enforcement.
+2. Add explicit runtime sidecar metadata for effective monotonic return enforcement.
 
-   Extend runtime function metadata so a `Func` can carry all information needed to enforce inherited return contracts even when bytecode says `VerifyRetKind::None`.
+   Extend runtime function state so a `Func` can carry all information needed to enforce inherited return contracts even when bytecode says `VerifyRetKind::None`, without changing the source-declared metadata stored in `SharedData`.
 
    At minimum, add metadata for:
 
-   - Effective inherited/direct `TypeIntersectionConstraint` for the return value.
+   - Effective inherited/direct return-contract metadata for the return value.
    - Effective structural return-check kind derived from that constraint set.
-   - Effective inherited reified/type-structure return contract, if any.
    - A fast “has monotonic inherited return checks” bit to avoid overhead on unaffected functions.
 
    Design rules:
 
-   - Preserve the existing direct declaration as the first non-inherited return type entry.
-   - Mark inherited constraints with `TypeConstraintFlags::Inherited`.
-   - In monotonic mode `1`, also mark inherited constraints `Soft`.
+   - Keep `SharedData` unchanged so it continues to represent only source-declared return metadata.
+   - Store effective monotonic metadata alongside `Func`, with ownership/lifetime rules that match class-specific runtime methods.
+   - Preserve the existing direct declaration as the declared/source-facing contract.
+   - Mark inherited constraints with `TypeConstraintFlags::Inherited` only within the new effective sidecar metadata where that distinction is meaningful.
+   - In monotonic mode `1`, inherited constraints in the effective sidecar metadata must behave as soft.
    - Keep reflection-compatible behavior: source-facing APIs should still treat the direct declaration as the user-visible declaration.
+   - Make the empty-direct-declaration case explicit: an unannotated override may have an empty/top direct `TypeIntersectionConstraint` while still carrying non-empty effective inherited enforcement metadata in the sidecar.
 
    Output of this step:
 
    - A `Func` can answer both “what was directly declared?” and “what must be enforced at runtime?”
 
-3. Add safe copy-on-write support for mutating per-class `Func` return metadata.
+3. Add safe alongside-`Func` storage and ownership for class-specific effective return metadata.
 
-   Before any class-assembly pass rewrites return constraints, ensure `Func` metadata can be detached safely. Investigation showed that cloned/runtime-reused methods can share `SharedData`, so modifying return constraints in place would leak constraints across classes.
+   Before any class-assembly pass attaches effective inherited contracts, add a runtime storage path for class-specific effective return metadata that does not modify `SharedData`. Investigation showed that cloned/runtime-reused methods can share `SharedData`, and that `SharedData` is intended to represent source metadata rather than class-specific effective augmentation.
 
-   Implement a utility that:
+   Implement storage/attachment logic that:
 
-   - Detects whether a `Func` shares mutable `SharedData`.
-   - Allocates/copys detached shared data when class-specific metadata must change.
-   - Updates all relevant pointers/ownership invariants without breaking existing `Func::clone()` and class build behavior.
+   - Attaches or references effective return-enforcement sidecar metadata from each runtime `Func`.
+   - Handles methods reused across classes without leaking one class’s effective inherited contracts into another class.
+   - Preserves existing `Func::clone()` and class build behavior without rewriting source-declared return metadata.
 
    Validation:
 
    - Two classes that reuse the same inherited method must not see each other’s effective monotonic return contracts unless they are intentionally identical.
-   - Trait-imported or inherited methods that require class-specific tightening must not mutate the original parent/trait definition.
+   - Trait-imported or inherited methods that require class-specific tightening must not mutate the original parent/trait definition or shared source-declared metadata.
 
    Output of this step:
 
-   - A safe path for later steps to attach effective inherited contracts to individual runtime methods.
+   - A safe path for later steps to attach class-specific effective inherited contracts to individual runtime methods.
 
 4. Define and implement a canonical effective-return-contract normalization algorithm.
 
    Implement shared helper logic, ideally in runtime type-constraint utilities or class-building helpers, to compute:
 
-   - The effective direct + inherited `TypeIntersectionConstraint`.
+   - The effective direct + inherited return-contract representation used by the sidecar metadata.
    - The effective structural return-check kind (`None`, `All`, `NonNull`).
-   - The effective inherited type-structure/reified return contract.
 
    Inputs:
 
@@ -112,6 +115,7 @@ This plan assumes the current codebase reality established during investigation:
    - Keep the direct declaration first if it exists.
    - If the method has no direct declaration, allow an inherited declaration to drive enforcement.
    - Preserve enough information to reconstruct whether a check is inherited-only or direct.
+   - If multiple distinct inherited constraints are simultaneously applicable, preserve the whole effective set and fail lazily at return sites rather than rejecting the class at load time.
 
    Edge cases:
 
@@ -119,8 +123,6 @@ This plan assumes the current codebase reality established during investigation:
    - Multiple interfaces declaring distinct return types that both need enforcement.
    - Recursive interface inheritance.
    - Trait-imported methods and abstract method stubs.
-   - Methods with only reified/type-structure return declarations upstream.
-
    Output of this step:
 
    - A single reusable implementation of effective return contract computation.
@@ -167,8 +169,7 @@ This plan assumes the current codebase reality established during investigation:
      - recursively inherited interface and abstract declarations
    - For each runtime method:
      - compute the effective contract
-     - detach/copy shared metadata if needed
-     - attach the effective contract and structural enforcement metadata
+     - attach the effective contract and structural enforcement metadata in the alongside-`Func` sidecar storage
    - Skip work when monotonic mode is `0`.
 
    Important constraints:
@@ -179,6 +180,7 @@ This plan assumes the current codebase reality established during investigation:
      - unannotated overrides
      - trait-imported methods
    - Reflection should still show the direct declaration only.
+   - Conflicting inherited constraints are not a class-definition error for this feature; they remain part of the effective contract and fail lazily if/when the method returns a violating value.
 
    Output of this step:
 
@@ -199,11 +201,6 @@ This plan assumes the current codebase reality established during investigation:
      - mode `1`: inherited failures behave as soft
      - mode `2`: inherited failures behave as hard
 
-   Reified/type-structure behavior:
-
-   - Add an interpreter path equivalent to `VerifyRetTypeTS` when inherited type-structure checks exist but bytecode has no emitted `VerifyRetTypeTS`.
-   - Do not double-check when direct bytecode already emitted the required type-structure verification.
-
    Output of this step:
 
    - Interpreted execution enforces inherited return contracts for unannotated overrides.
@@ -218,11 +215,12 @@ This plan assumes the current codebase reality established during investigation:
    - In `irgen-types.cpp`, iterate the effective return constraints, not just the assumption implied by bytecode.
    - Thread policy mode into the existing hard/soft decision instead of relying only on `Cfg::Repo::Authoritative && !tc.isSoft() && !tc.isThis()`.
    - Ensure inherited-only checks are emitted even when bytecode has `VerifyRetKind::None`.
-   - Add a JIT path equivalent to `VerifyRetTypeTS` for inherited type-structure/reified checks that HackC could not emit.
 
    Validation requirements:
 
+   - JIT must have exactly the same user-visible behavior as the interpreter.
    - JIT must not become less strict than the interpreter.
+   - JIT must not become more strict than the interpreter.
    - Hard-fail IR semantics must remain consistent with the terminal/non-terminal contracts of the relevant IR instructions.
    - Async dropthrough behavior must match interpreter semantics after normalization.
 
@@ -239,7 +237,6 @@ This plan assumes the current codebase reality established during investigation:
    - Inherited failures in mode `1` must behave like soft return checks even if the original ancestor declaration was hard.
    - Inherited failures in mode `2` must behave like hard return checks.
    - Direct source-declared checks should preserve their existing semantics unless product explicitly requires monotonic mode to alter them too.
-   - Ensure ordinary type-constraint failures and reified/type-structure failures do not diverge in warning/error behavior.
 
    Output of this step:
 
@@ -257,9 +254,8 @@ This plan assumes the current codebase reality established during investigation:
 
    The HHBBC model must include:
 
-   - effective `TypeIntersectionConstraint`
+   - effective return-contract representation matching the runtime sidecar metadata
    - effective structural check kind
-   - any inherited type-structure/reified return contract
    - async-normalized semantics from Step 5
 
    Output of this step:
@@ -274,7 +270,6 @@ This plan assumes the current codebase reality established during investigation:
 
    - When bytecode says `VerifyRetKind::None`, HHBBC must still check whether the current function context has inherited monotonic return checks.
    - `All -> NonNull` and `All -> None` reductions must only occur if they remain valid against the effective inherited contract.
-   - Inherited-only type-structure/reified return checks must be modeled even when no `VerifyRetTypeTS` instruction was emitted by HackC.
 
    Validation:
 
@@ -296,6 +291,7 @@ This plan assumes the current codebase reality established during investigation:
    - Debug/disassembly output that prints all return constraints should either:
      - filter inherited constraints in user-facing contexts, or
      - explicitly label them as inherited/effective to avoid confusion.
+   - Declared/source metadata stored in `SharedData` and effective monotonic sidecar metadata must be clearly distinguished in any debug-only or verifier-only output.
 
    Output of this step:
 
@@ -311,9 +307,9 @@ This plan assumes the current codebase reality established during investigation:
    - inherited-but-not-overridden methods that still need effective checks
    - multiple interfaces declaring the same method with equivalent return types
    - multiple interfaces declaring the same method with distinct return types
+   - conflicting inherited return families that are unsatisfiable and therefore fail lazily at return time rather than at class-definition time
    - trait-imported methods
    - recursive interface inheritance
-   - inherited-only type-structure/reified returns
    - each monotonic mode: `0`, `1`, `2`
    - mixed async/non-async override families using the compatibility matrix from Step 5
 
@@ -363,16 +359,13 @@ This plan intentionally separates:
 
 If future product requirements want a fully unified mechanism, that would require a larger redesign of how return verification is encoded than this plan currently assumes.
 
-### C. Reified/type-structure inherited checks are likely the hardest subproblem
+### C. Reified/type-structure inherited checks are explicitly Phase 2
 
-Ordinary inherited `TypeConstraint` checks can be attached as effective runtime metadata fairly naturally. Inherited reified/type-structure checks are harder because today they are tied to emitted `VerifyRetTypeTS`.
+This plan intentionally does not include inherited reified/type-structure return enforcement in the numbered implementation steps.
 
-If implementation complexity is too high, it may be reasonable to stage this internally as:
+Ordinary inherited `TypeConstraint` checks are the Phase 1 scope. Inherited reified/type-structure checks are Phase 2 because today they are tied to emitted `VerifyRetTypeTS` and require a separate representation and execution-path design.
 
-1. ordinary inherited type-constraint monotonic enforcement
-2. inherited reified/type-structure monotonic enforcement
-
-However, the final feature should not be considered complete until both behave consistently.
+Phase 2 should be planned separately after Phase 1 lands and reaches cross-engine parity.
 
 ### D. Async/non-async normalization must be made explicit before coding deeply
 
@@ -384,9 +377,8 @@ Do not proceed with broad implementation until the compatibility matrix from Ste
 
 Do not simply append inherited constraints into `returnTypeConstraints()` and assume everything works automatically. That is only safe after:
 
-- class-specific `Func` metadata detachment exists
+- class-specific effective metadata exists alongside `Func`
 - inherited-only return sites are actually triggered even when bytecode says `VerifyRetKind::None`
-- inherited type-structure/reified checks have an execution path
 - HHBBC has been updated to understand the same effective contract
 
 Without those pieces, the feature will be incomplete and engines will diverge.
