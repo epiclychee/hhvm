@@ -51,6 +51,11 @@ bool EvalLoader::EnableArgsInBacktracesDefault() {
   return !Cfg::Repo::Authoritative;
 }
 
+void EvalLoader::MonotonicInheritedReturnTypeHintsPostProcess(int32_t& val) {
+  if (val < 0) val = 0;
+  if (val > 2) val = 2;
+}
+
 void EvalLoader::AuthoritativeModePostProcess(bool& val) {
   if (Cfg::Repo::Authoritative) {
     val = true;
