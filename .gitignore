@@ -114,6 +114,7 @@ codex-progress.log
 /hphp/runtime/base/configs/configs-generated.cpp
 /hphp/runtime/base/configs/repo-global-data-generated.h
 /hphp/runtime/base/configs/repo-options-flags-generated.h
+/hphp/runtime/base/configs/repo-option-flags-generated.h
 /hphp/runtime/base/configs/unit-cache-generated.h
 /hphp/tools/configs/.cargo/
 /hphp/tools/configs/target/

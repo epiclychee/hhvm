@@ -60,7 +60,9 @@ ExternalProject_Add(
     "-Dfmt_DIR=${fmt_DIR}"
     "-Dfolly_DIR=${FOLLY_INSTALL_DIR}/lib/cmake/folly"
     "-Dfizz_DIR=${FIZZ_INSTALL_DIR}/lib/cmake/fizz"
+    "-DFizz_DIR=${FIZZ_INSTALL_DIR}/lib/cmake/fizz"
     "-DFBThrift_DIR=${THRIFT_INSTALL_DIR}/lib/cmake/fbthrift"
+    "-Dmvfst_DIR=${MVFST_INSTALL_DIR}/lib/cmake/mvfst"
     "-Dwangle_DIR=${WANGLE_INSTALL_DIR}/lib/cmake/wangle"
   DEPENDS ${MCROUTER_DEPS} ragel
   EXCLUDE_FROM_ALL
