@@ -49,7 +49,7 @@ std::string show(PhysReg r) {
       return folly::to<std::string>(
         r.isGP() ? (vixl::Register(r).size() == vixl::kXRegSize ? 'x' : 'w')
                  : (vixl::VRegister(r).size() == vixl::kSRegSize ? 's' : 'd'),
-        ((vixl::CPURegister)r).code()
+        ((vixl::CPURegister)r).GetCode()
       );
   }
   not_reached();

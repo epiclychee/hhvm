@@ -9,7 +9,11 @@
 #include <folly/Exception.h>
 #include <memory>
 #include <string>
+#if __has_include("mysql/server/include/mysql_async.h")
 #include "mysql/server/include/mysql_async.h" // @manual=//mysql/server/include:mysql_async_namespaced
+#else
+#include <mysql_async.h>
+#endif
 
 #include "squangle/base/ExceptionUtil.h"
 #include "squangle/mysql_client/ConnectionOptions.h"

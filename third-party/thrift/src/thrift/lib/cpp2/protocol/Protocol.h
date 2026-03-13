@@ -22,6 +22,7 @@
 #include <cstdint>
 #include <memory>
 #include <string>
+#include <type_traits>
 
 #include <glog/logging.h>
 
@@ -150,6 +151,7 @@ inline bool validate_bool(uint8_t value) {
   return value;
 invalid:
   LOG(FATAL) << kUndefinedBehaviorMsg;
+  __builtin_unreachable();
 #else
   // Store in a volatile variable to prevent the compiler from optimizing the
   // check away.
@@ -452,7 +454,15 @@ inline void readStringBody(
 template <typename Protocol>
 constexpr bool usesFieldNames() {
   if constexpr (requires { typename Protocol::ProtocolReader; }) {
-    return usesFieldNames<typename Protocol::ProtocolReader>();
+    if constexpr (std::is_void_v<typename Protocol::ProtocolReader>) {
+      if constexpr (!requires { Protocol::kUsesFieldNames(); }) {
+        return true;
+      } else {
+        return Protocol::kUsesFieldNames();
+      }
+    } else {
+      return usesFieldNames<typename Protocol::ProtocolReader>();
+    }
   } else if constexpr (!requires { Protocol::kUsesFieldNames(); }) {
     return true;
   } else {

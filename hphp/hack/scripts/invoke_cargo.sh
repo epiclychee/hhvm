@@ -40,7 +40,13 @@ if [ -z "${HACK_NO_CARGO_VENDOR}" ]; then
 fi
 
 if [ -z "${TARGET_DIR}" ]; then
-  TARGET_DIR="${HACK_BUILD_ROOT}/target/$pkg"
+  if [ -n "${HACK_RUST_FFI_BUILD_ROOT}" ]; then
+    TARGET_DIR="${HACK_RUST_FFI_BUILD_ROOT}/target/$pkg"
+  elif [ -n "${DUNE_BUILD_DIR}" ]; then
+    TARGET_DIR="${DUNE_BUILD_DIR}/rust_ffi/target/$pkg"
+  else
+    TARGET_DIR="${HACK_BUILD_ROOT}/target/$pkg"
+  fi
 fi
 
 if [ -z ${HACKDEBUG+1} ]; then
@@ -61,9 +67,31 @@ BUILD_PARAMS+=("$profile_flags")
   if [ -z "$bin" ]; then
     cargo build "${BUILD_PARAMS[@]}"
   else
-    cargo run --bin "$bin" -- "$@"
+    cargo run "${BUILD_PARAMS[@]}" --bin "$bin" -- "$@"
   fi
 ) &&
 if [ -z "$exe" ] && [ -z "$bin" ]; then
+  # Newer cxx-build writes generated bridge files under:
+  #   $TARGET_DIR/$profile/build/<crate-hash>/out/cxxbridge/{sources,include}/...
+  # Keep mirroring to the legacy flat path expected by CMake:
+  #   $TARGET_DIR/cxxbridge/$lib/$lib.rs.{cc,h}
+  cxxbridge_source=$(
+    find "${TARGET_DIR}/${profile}/build" \
+      -path "*/out/cxxbridge/sources/${pkg}/${lib}.rs.cc" \
+      -print -quit 2>/dev/null || true
+  )
+  cxxbridge_header=$(
+    find "${TARGET_DIR}/${profile}/build" \
+      -path "*/out/cxxbridge/include/${pkg}/${lib}.rs.h" \
+      -print -quit 2>/dev/null || true
+  )
+  if [ -n "${cxxbridge_source}" ] && [ -n "${cxxbridge_header}" ]; then
+    cxxbridge_include_dir=$(dirname "$(dirname "${cxxbridge_header}")")
+    mkdir -p "${TARGET_DIR}/cxxbridge"
+    cp -R "${cxxbridge_include_dir}/." "${TARGET_DIR}/cxxbridge/"
+    mkdir -p "${TARGET_DIR}/cxxbridge/${lib}"
+    cp "${cxxbridge_source}" "${TARGET_DIR}/cxxbridge/${lib}/${lib}.rs.cc"
+    cp "${cxxbridge_header}" "${TARGET_DIR}/cxxbridge/${lib}/${lib}.rs.h"
+  fi
   cp "${TARGET_DIR}/$profile/lib$lib.a" "lib${lib}.a"
 fi

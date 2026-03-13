@@ -165,6 +165,10 @@ std::unique_ptr<Connection> OperationBase::releaseConnection() {
   return conn_proxy_->releaseConnection();
 }
 
+std::unique_ptr<Connection> OperationBase::ConnectionProxy::releaseConnection() {
+  return nullptr;
+}
+
 void Operation::snapshotMysqlErrors(unsigned int errnum, std::string error) {
   mysql_errno_ = errnum;
   if (mysql_errno_ != 0) {

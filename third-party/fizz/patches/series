@@ -1,3 +1,2 @@
 do-not-build-testsupport.patch
-use-hhvm-libsodium-cmake.patch
 fizz-config-libsodium.patch

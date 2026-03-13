@@ -2,7 +2,7 @@ Index: fizz/fizz/CMakeLists.txt
 ===================================================================
 --- fizz.orig/fizz/CMakeLists.txt
 +++ fizz/fizz/CMakeLists.txt
-@@ -64,7 +64,7 @@ endif()
+@@ -71,7 +71,7 @@ include(CheckAtomic)
  
  include(CheckAtomic)
  

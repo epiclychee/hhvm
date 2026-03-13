@@ -41,6 +41,20 @@ set_property(GLOBAL PROPERTY WANGLE_COMPONENT_TARGETS)
 set_property(GLOBAL PROPERTY WANGLE_DEFERRED_DEPS)
 set_property(GLOBAL PROPERTY WANGLE_GRANULAR_INTERFACE_TARGETS)
 
+# Normalize dependency lists so builds still work when granular Folly component
+# targets are not exported by the installed Folly package.
+function(wangle_normalize_external_deps out_var)
+  set(_normalized "")
+  foreach(_dep IN LISTS ARGN)
+    if(_dep MATCHES "^Folly::" AND NOT TARGET "${_dep}" AND TARGET Folly::folly)
+      set(_dep "Folly::folly")
+    endif()
+    list(APPEND _normalized "${_dep}")
+  endforeach()
+  list(REMOVE_DUPLICATES _normalized)
+  set(${out_var} "${_normalized}" PARENT_SCOPE)
+endfunction()
+
 # Define a granular wangle library that:
 # 1. Compiles sources ONCE via OBJECT library
 # 2. Creates a STATIC library for individual linking (static builds)
@@ -83,9 +97,10 @@ function(wangle_add_library _target_name)
         $<INSTALL_INTERFACE:${INCLUDE_INSTALL_DIR}>
     )
 
-    # Link exported deps for INTERFACE libraries
+    # Link exported deps for INTERFACE libraries.
     if(WANGLE_LIB_EXPORTED_DEPS)
-      target_link_libraries(${_target_name} INTERFACE ${WANGLE_LIB_EXPORTED_DEPS})
+      wangle_normalize_external_deps(_normalized_exported_deps ${WANGLE_LIB_EXPORTED_DEPS})
+      target_link_libraries(${_target_name} INTERFACE ${_normalized_exported_deps})
     endif()
 
     install(TARGETS ${_target_name} EXPORT wangle-exports)
@@ -140,6 +155,8 @@ function(wangle_add_library _target_name)
       list(APPEND _immediate_deps ${_dep})
     endif()
   endforeach()
+
+  wangle_normalize_external_deps(_immediate_deps ${_immediate_deps})
 
   # Link non-wangle deps immediately - they provide include paths needed at compile time
   if(_immediate_deps)

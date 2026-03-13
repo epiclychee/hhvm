@@ -9,6 +9,19 @@ set_property(GLOBAL PROPERTY PROXYGEN_COMPONENT_TARGETS)
 set_property(GLOBAL PROPERTY PROXYGEN_DEFERRED_DEPS)
 set_property(GLOBAL PROPERTY PROXYGEN_GRANULAR_INTERFACE_TARGETS)
 
+function(proxygen_normalize_folly_deps _out_var)
+  set(_normalized)
+  foreach(_dep IN LISTS ARGN)
+    if(_dep MATCHES "^Folly::" AND NOT TARGET ${_dep})
+      list(APPEND _normalized Folly::folly)
+    else()
+      list(APPEND _normalized ${_dep})
+    endif()
+  endforeach()
+  list(REMOVE_DUPLICATES _normalized)
+  set(${_out_var} ${_normalized} PARENT_SCOPE)
+endfunction()
+
 # Define a granular proxygen library that:
 # 1. Compiles sources ONCE via OBJECT library
 # 2. Creates a STATIC library for individual linking (static builds)
@@ -38,6 +51,8 @@ function(proxygen_add_library _target_name)
     # Legacy support: if no SRCS keyword, treat remaining args as sources
     set(_sources ${PROXYGEN_LIB_UNPARSED_ARGUMENTS})
   endif()
+  proxygen_normalize_folly_deps(PROXYGEN_LIB_EXPORTED_DEPS ${PROXYGEN_LIB_EXPORTED_DEPS})
+  proxygen_normalize_folly_deps(PROXYGEN_LIB_DEPS ${PROXYGEN_LIB_DEPS})
 
   # Object library name - used for monolithic aggregation
   set(_obj_target "${_target_name}_obj")

@@ -13,6 +13,9 @@ get_filename_component(BOOST_LIBRARY_DIR "${FIRST_LIB}" DIRECTORY)
 get_target_property(JEMALLOC_INCLUDE_DIR jemalloc INTERFACE_INCLUDE_DIRECTORIES)
 get_target_property(fbmysqlclient_INCLUDE_DIR fbmysqlclient INTERFACE_INCLUDE_DIRECTORIES)
 get_target_property(re2_INCLUDE_DIR re2 INTERFACE_INCLUDE_DIRECTORIES)
+set(SQUANGLE_CXX_FLAGS "${CMAKE_CXX_FLAGS}")
+string(REGEX REPLACE "-std=[^ ]+" "-std=gnu++20" SQUANGLE_CXX_FLAGS "${SQUANGLE_CXX_FLAGS}")
+string(REPLACE "-Wno-adress" "-Wno-address" SQUANGLE_CXX_FLAGS "${SQUANGLE_CXX_FLAGS}")
 
 ExternalProject_Add(
   bundled_squangle
@@ -37,8 +40,7 @@ ExternalProject_Add(
 
     -DCMAKE_C_COMPILER=${CMAKE_C_COMPILER}
     -DCMAKE_CXX_COMPILER=${CMAKE_CXX_COMPILER}
-    -DCMAKE_CXX_STANDARD=${CMAKE_CXX_STANDARD}
-    -DCMAKE_CXX_FLAGS=${CMAKE_CXX_FLAGS}
+    -DCMAKE_CXX_STANDARD=20
     -DCMAKE_OSX_SYSROOT=${CMAKE_OSX_SYSROOT}
 
     -DBoost_NO_SYSTEM_PATHS=ON
@@ -53,7 +55,7 @@ ExternalProject_Add(
     "-Dfbmysqlclient_INCLUDE_DIR=${fbmysqlclient_INCLUDE_DIR}"
     "-Dre2_INCLUDE_DIR=${re2_INCLUDE_DIR}"
 
-    "-DCMAKE_CXX_FLAGS=${CMAKE_CXX_FLAGS} -I${JEMALLOC_INCLUDE_DIR}"
+    "-DCMAKE_CXX_FLAGS=${SQUANGLE_CXX_FLAGS} -I${JEMALLOC_INCLUDE_DIR}"
 )
 ExternalProject_Get_property(bundled_squangle INSTALL_DIR)
 

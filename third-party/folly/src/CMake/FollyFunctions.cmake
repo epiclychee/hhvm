@@ -426,7 +426,6 @@ function(folly_add_library)
     endif()
     install(
       TARGETS ${_target_name}
-      EXPORT folly
     )
     add_library(Folly::${_target_name} ALIAS ${_target_name})
     return()
@@ -527,7 +526,6 @@ function(folly_add_library)
     # Install the INTERFACE library
     install(
       TARGETS ${_target_name}
-      EXPORT folly
     )
   elseif(BUILD_SHARED_LIBS AND FOLLY_LIB_EXCLUDE_FROM_MONOLITH)
     # For excluded targets in shared builds: create SHARED library with actual code
@@ -581,7 +579,6 @@ function(folly_add_library)
     # Install the SHARED library
     install(
       TARGETS ${_target_name}
-      EXPORT folly
       LIBRARY DESTINATION ${LIB_INSTALL_DIR}
       ARCHIVE DESTINATION ${LIB_INSTALL_DIR}
     )
@@ -634,7 +631,6 @@ function(folly_add_library)
     # Install the STATIC library
     install(
       TARGETS ${_target_name}
-      EXPORT folly
       LIBRARY DESTINATION ${LIB_INSTALL_DIR}
       ARCHIVE DESTINATION ${LIB_INSTALL_DIR}
     )

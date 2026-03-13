@@ -190,6 +190,7 @@ set(FFI_HEADER "${RUST_FFI_BUILD_ROOT}/hphp/hack/src/hackc/ffi.h")
 set(NAMING_SPECIAL_NAMES_HEADER "${RUST_FFI_BUILD_ROOT}/hphp/hack/src/naming/naming-special-names.h")
 set(TYPE_CONSTRAINT_HEADER "${CMAKE_SOURCE_DIR}/hphp/runtime/vm/type-constraint-flags.h")
 set(FCALL_HEADER "${CMAKE_SOURCE_DIR}/hphp/runtime/vm/fcall-args-flags.h")
+set(ITER_ARGS_HEADER "${CMAKE_SOURCE_DIR}/hphp/runtime/vm/iter-args-flags.h")
 set(HHBC_HEADER "${CMAKE_SOURCE_DIR}/hphp/runtime/vm/hhbc-shared.h")
 set(ATTR_HEADER "${CMAKE_SOURCE_DIR}/hphp/runtime/base/attr.h")
 set(FFI_EXTRA_HEADER "${CMAKE_SOURCE_DIR}/hphp/hack/src/hackc/ffi/ffi_extra.h")
@@ -208,7 +209,7 @@ add_custom_command(
       ${NAMING_SPECIAL_NAMES_SRCS} &&
     ${INVOKE_CARGO} ffi_cbindgen ffi_cbindgen --bin ffi_cbindgen
       --header "${HHBC_AST_HEADER}" --namespaces "HPHP,hackc,hhbc"
-      --includes "${FFI_HEADER},${NAMING_SPECIAL_NAMES_HEADER},${TYPE_CONSTRAINT_HEADER},${ATTR_HEADER},${FCALL_HEADER},${HHBC_HEADER}"
+      --includes "${FFI_HEADER},${NAMING_SPECIAL_NAMES_HEADER},${TYPE_CONSTRAINT_HEADER},${ATTR_HEADER},${FCALL_HEADER},${ITER_ARGS_HEADER},${HHBC_HEADER}"
       ${HHBC_AST_SRCS}
   DEPENDS ${RUST_ENV_DEPS} "${RUST_OPCODES}"
   COMMENT "Generating hhbc-unit.h"
@@ -278,7 +279,18 @@ function(build_cxx_bridge NAME)
         . "${CMAKE_CURRENT_BINARY_DIR}/dev_env_rust_only.sh" &&
         ${INVOKE_CARGO} "${NAME}" "${NAME}" --target-dir "${FFI_BRIDGE_BIN}" &&
         ${CMAKE_COMMAND} -E copy "${GENERATED}.rs.cc" "${RUST_PART_CXX}" &&
-        ${CMAKE_COMMAND} -E copy "${GENERATED}.rs.h" "${RUST_PART_HEADER}"
+        ${CMAKE_COMMAND} -E copy "${GENERATED}.rs.h" "${RUST_PART_HEADER}" &&
+        cxx_header=`find "${FFI_BRIDGE_BIN}/${PROFILE}/build" -path "*/out/cxxbridge/include/rust/cxx.h" -print -quit` &&
+        test -n "$$cxx_header" &&
+        ${CMAKE_COMMAND} -E make_directory "${GENERATED_CXXBRIDGE}/rust" &&
+        ${CMAKE_COMMAND} -E copy "$$cxx_header" "${GENERATED_CXXBRIDGE}/rust/cxx.h" &&
+        [ "${NAME}" != "compiler_ffi" ] ||
+        (
+          options_gen_header=`find "${FFI_BRIDGE_BIN}/${PROFILE}/build" -path "*/out/options_gen.h" -print -quit` &&
+          test -n "$$options_gen_header" &&
+          ${CMAKE_COMMAND} -E make_directory "${RUST_FFI_BUILD_ROOT}/hphp/hack/src/hackc/compile" &&
+          ${CMAKE_COMMAND} -E copy "$$options_gen_header" "${RUST_FFI_BUILD_ROOT}/hphp/hack/src/hackc/compile/options_gen.h"
+        )
       WORKING_DIRECTORY ${FFI_BRIDGE_SRC}
       DEPENDS ${RUST_ENV_DEPS} "${OPCODE_DATA}"
   )

@@ -100,7 +100,7 @@ inline vixl::VRegister x2v(PhysReg x64reg) {
   auto const r = vixl::CPURegister(x64reg);
   // Use .16b (16 lanes of bytes) format for 128-bit vector operations.
   // The new VIXL requires an explicit lane count for ld1/st1 encoding.
-  return vixl::VRegister(r.code(), 128, 16);
+  return vixl::VRegister(r.GetCode(), 128, 16);
 }
 
 /*

@@ -15,6 +15,34 @@ get_target_property(ZSTD_LIBRARY zstd INTERFACE_LINK_LIBRARIES)
 get_target_property(JEMALLOC_INCLUDE_DIR jemalloc INTERFACE_INCLUDE_DIRECTORIES)
 get_target_property(GLOG_INCLUDE_DIR glog INTERFACE_INCLUDE_DIRECTORIES)
 get_target_property(GLOG_LIBRARY glog INTERFACE_LINK_LIBRARIES)
+set(XXHASH_HINT_INCLUDE_DIR "${CMAKE_SOURCE_DIR}/third-party/zstd/bundled_zstd-prefix/src/bundled_zstd/lib/common")
+if (EXISTS "/usr/include/xxhash.h")
+  set(THRIFT_XXHASH_INCLUDE_DIR "/usr/include")
+else()
+  find_path(
+    THRIFT_XXHASH_INCLUDE_DIR
+    NAMES xxhash.h
+    HINTS "${XXHASH_HINT_INCLUDE_DIR}"
+    NO_CACHE
+  )
+endif()
+if (EXISTS "/usr/lib/x86_64-linux-gnu/libxxhash.so")
+  set(THRIFT_XXHASH_LIBRARY "/usr/lib/x86_64-linux-gnu/libxxhash.so")
+else()
+  find_library(
+    THRIFT_XXHASH_LIBRARY
+    NAMES xxhash
+    HINTS /usr/lib/x86_64-linux-gnu /lib/x86_64-linux-gnu
+    NO_CACHE
+  )
+endif()
+if (NOT THRIFT_XXHASH_LIBRARY)
+  find_file(
+    THRIFT_XXHASH_LIBRARY
+    NAMES libxxhash.so.0
+    PATHS /lib/x86_64-linux-gnu /usr/lib/x86_64-linux-gnu
+  )
+endif()
 
 get_filename_component(GLOG_LIBRARY_DIR "${GLOG_LIBRARY}" DIRECTORY)
 
@@ -52,10 +80,14 @@ ExternalProject_Add(
     -DGLOG_LIBRARYDIR=${GLOG_LIBRARY_DIR}
     "-DZSTD_INCLUDE_DIRS=${ZSTD_INCLUDE_DIR}"
     "-DZSTD_LIBRARIES=${ZSTD_LIBRARY}"
+    "-DXxhash_INCLUDE_DIR=${THRIFT_XXHASH_INCLUDE_DIR}"
+    "-DXxhash_LIBRARY_RELEASE=${THRIFT_XXHASH_LIBRARY}"
+    "-DXxhash_LIBRARY=${THRIFT_XXHASH_LIBRARY}"
 
-    "-DFizz_DIR=${FIZZ_INSTALL_DIR}/lib/cmake/fizz"
+    "-Dfizz_DIR=${FIZZ_INSTALL_DIR}/lib/cmake/fizz"
     "-Dfmt_DIR=${fmt_DIR}"
     "-Dfolly_DIR=${FOLLY_INSTALL_DIR}/lib/cmake/folly"
+    "-Dmvfst_DIR=${MVFST_INSTALL_DIR}/lib/cmake/mvfst"
     "-Dwangle_DIR=${WANGLE_INSTALL_DIR}/lib/cmake/wangle"
 
     "-DCMAKE_C_FLAGS=${CMAKE_C_FLAGS}"

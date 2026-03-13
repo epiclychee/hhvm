@@ -28,6 +28,14 @@ if(NOT HAVE_CUSTOM_LIBEVENT)
     MATCHES "/server/libevent-")
 endif()
 
+set_source_files_properties(
+  "${CMAKE_CURRENT_SOURCE_DIR}/base/coeffects-config.cpp"
+  "${CMAKE_CURRENT_SOURCE_DIR}/vm/hackc-translator.cpp"
+  "${CMAKE_CURRENT_SOURCE_DIR}/vm/unit-parser.cpp"
+  PROPERTIES
+    COMPILE_OPTIONS "-fpermissive"
+)
+
 add_custom_command(
   OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/ir-opcode-generated.h"
   COMMAND

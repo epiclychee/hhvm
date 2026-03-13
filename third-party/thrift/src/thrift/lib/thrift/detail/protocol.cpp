@@ -178,7 +178,11 @@ BoxedValueMap& Value::set_mapValue(ValueMap&& t) {
 }
 
 static std::size_t hashVector(const std::vector<std::size_t>& a) {
+#if defined(XXH_VERSION_NUMBER) && (XXH_VERSION_NUMBER >= 800)
   return XXH3_64bits(a.data(), a.size() * sizeof(a[0]));
+#else
+  return XXH64(a.data(), a.size() * sizeof(a[0]), 0);
+#endif
 }
 
 std::size_t hash_value(const Value& s) {

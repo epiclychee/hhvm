@@ -70,8 +70,8 @@ endif()
 
 include(CheckAtomic)
 
-find_package(Sodium REQUIRED)
-set(FIZZ_HAVE_SODIUM ${Sodium_FOUND})
+find_package(LibSodium REQUIRED)
+set(FIZZ_HAVE_SODIUM ${LIBSODIUM_FOUND})
 
 SET(FIZZ_SHINY_DEPENDENCIES "")
 SET(FIZZ_LINK_LIBRARIES "")
@@ -211,7 +211,7 @@ target_include_directories(
     $<INSTALL_INTERFACE:${INCLUDE_INSTALL_DIR}>
     ${FOLLY_INCLUDE_DIR}
     ${OPENSSL_INCLUDE_DIR}
-    ${sodium_INCLUDE_DIR}
+    ${LIBSODIUM_INCLUDE_DIR}
     ${ZSTD_INCLUDE_DIR}
   PRIVATE
     ${GLOG_INCLUDE_DIRS}
@@ -221,47 +221,9 @@ target_include_directories(
 
 target_link_libraries(fizz
   PUBLIC
-    # Granular folly targets matching Buck dependencies
-    Folly::folly_range
-    Folly::folly_io_iobuf
-    Folly::folly_optional
-    Folly::folly_conv
-    Folly::folly_string
-    Folly::folly_c_portability
-    Folly::folly_exception_wrapper
-    Folly::folly_small_vector
-    Folly::folly_io_async_write_flags
-    Folly::folly_executor
-    Folly::folly_io_async_async_socket_exception
-    Folly::folly_io_async_delayed_destruction
-    Folly::folly_io_async_async_socket
-    Folly::folly_io_async_decorated_async_transport_wrapper
-    Folly::folly_file_util
-    Folly::folly_ssl_openssl_cert_utils
-    Folly::folly_ssl_openssl_ptr_types
-    Folly::folly_io_async_async_transport_certificate
-    Folly::folly_io_async_ssl_openssl_transport_certificate
-    Folly::folly_memory
-    Folly::folly_lang_assume
-    Folly::folly_portability_openssl
-    Folly::folly_ssl_openssl_hash
-    Folly::folly_lang_bits
-    Folly::folly_lang_checked_math
-    Folly::folly_overload
-    Folly::folly_tracing_static_tracepoint
-    Folly::folly_futures_core
-    Folly::folly_io_async_async_base
-    Folly::folly_synchronized
-    Folly::folly_container_evicting_cache_map
-    Folly::folly_lang_switch
-    Folly::folly_io_socket_option_map
-    Folly::folly_io_async_password_in_file
-    Folly::folly_io_async_ssl_context
-    Folly::folly_format
-    Folly::folly_portability_unistd
-    Folly::folly_detail_base64_detail_base64_api
+    Folly::folly
     ${OPENSSL_LIBRARIES}
-    sodium
+    ${LIBSODIUM_LIBRARIES}
     Threads::Threads
     ZLIB::ZLIB
     ${ZSTD_LIBRARY}
@@ -335,37 +297,36 @@ SET(FIZZ_TEST_INSTALL_PREFIX ${CMAKE_INSTALL_PREFIX})
 if(BUILD_TESTS)
   find_package(GMock 1.8.0 MODULE REQUIRED)
   find_package(GTest 1.8.0 MODULE REQUIRED)
-endif()
-
-add_library(fizz_test_support
-  crypto/aead/test/TestUtil.cpp
-  crypto/test/TestUtil.cpp
-  crypto/test/TestKeys.cpp
-  protocol/ech/test/TestUtil.cpp
-)
-
-target_link_libraries(fizz_test_support
-  PUBLIC
-    fizz
-)
-
-# export fizz headers and targets for unit tests utils
-# since other projects such as mvfst and proxygen use them
-install(
-  TARGETS fizz_test_support
-  EXPORT fizz-exports
-  ARCHIVE DESTINATION ${LIB_INSTALL_DIR}
-  LIBRARY DESTINATION ${LIB_INSTALL_DIR}
-)
-
-foreach(dir ${FIZZ_TEST_HEADER_DIRS})
-  get_filename_component(PARENT_DIR "/${dir}" DIRECTORY)
-  install(
-    DIRECTORY ${dir}
-    DESTINATION "${FIZZ_TEST_INSTALL_PREFIX}/include/fizz${PARENT_DIR}"
-    FILES_MATCHING PATTERN "*.h"
+  add_library(fizz_test_support
+    crypto/aead/test/TestUtil.cpp
+    crypto/test/TestUtil.cpp
+    crypto/test/TestKeys.cpp
+    protocol/ech/test/TestUtil.cpp
   )
-endforeach()
+
+  target_link_libraries(fizz_test_support
+    PUBLIC
+      fizz
+  )
+
+  # export fizz headers and targets for unit tests utils
+  # since other projects such as mvfst and proxygen use them
+  install(
+    TARGETS fizz_test_support
+    EXPORT fizz-exports
+    ARCHIVE DESTINATION ${LIB_INSTALL_DIR}
+    LIBRARY DESTINATION ${LIB_INSTALL_DIR}
+  )
+
+  foreach(dir ${FIZZ_TEST_HEADER_DIRS})
+    get_filename_component(PARENT_DIR "/${dir}" DIRECTORY)
+    install(
+      DIRECTORY ${dir}
+      DESTINATION "${FIZZ_TEST_INSTALL_PREFIX}/include/fizz${PARENT_DIR}"
+      FILES_MATCHING PATTERN "*.h"
+    )
+  endforeach()
+endif()
 
 macro(add_gtest test_source test_name)
   add_executable(${test_name} ${test_source} test/CMakeTestMain.cpp)
