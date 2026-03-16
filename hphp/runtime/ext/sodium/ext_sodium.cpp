@@ -16,13 +16,13 @@
 #include "hphp/runtime/base/builtin-functions.h"
 #include "hphp/runtime/base/type-array.h"
 #include "hphp/runtime/base/type-string.h"
+#include "hphp/runtime/base/usdt.h"
 #include "hphp/runtime/ext/extension.h"
 #include "hphp/runtime/base/array-init.h"
 #include "hphp/runtime/vm/native.h"
 
 #include <cstring>
 #include <sodium.h>
-#include <usdt/usdt.h>
 
 namespace HPHP {
 

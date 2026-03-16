@@ -15,7 +15,6 @@
 */
 
 #include <fcntl.h>
-#include <bpf/bpf.h>
 #include <sys/un.h>
 
 #include <folly/File.h>
@@ -24,6 +23,25 @@
 #include "hphp/util/configs/server.h"
 #include "hphp/util/process.h"
 #include "hphp/util/trace.h"
+
+#if __has_include(<bpf/bpf.h>)
+#include <bpf/bpf.h>
+#define HHVM_HAVE_LIBBPF 1
+#else
+#define HHVM_HAVE_LIBBPF 0
+// Keep buildable on environments without libbpf headers.
+static int bpf_obj_get(const char*) {
+  errno = ENOSYS;
+  return -1;
+}
+static int bpf_map_update_elem(int, const void*, const void*, uint64_t) {
+  errno = ENOSYS;
+  return -1;
+}
+#ifndef BPF_ANY
+#define BPF_ANY 0
+#endif
+#endif
 
 TRACE_SET_MOD(thread_sched)
 

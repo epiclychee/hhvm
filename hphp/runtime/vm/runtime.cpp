@@ -20,6 +20,7 @@
 #include "hphp/runtime/base/builtin-functions.h"
 #include "hphp/runtime/base/request-info.h"
 #include "hphp/runtime/base/unit-cache.h"
+#include "hphp/runtime/base/usdt.h"
 
 #include "hphp/util/configs/eval.h"
 #include "hphp/util/conv-10.h"
@@ -27,7 +28,6 @@
 #include "hphp/util/trace.h"
 #include "hphp/util/text-util.h"
 
-#include <usdt/usdt.h>
 #include <folly/Random.h>
 
 namespace HPHP {

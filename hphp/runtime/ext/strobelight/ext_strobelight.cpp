@@ -23,6 +23,7 @@
 #include "hphp/runtime/base/backtrace.h"
 #include "hphp/runtime/base/request-info.h"
 #include "hphp/runtime/base/surprise-flags.h"
+#include "hphp/runtime/base/usdt.h"
 
 #include "hphp/util/configs/strobelight.h"
 #include "hphp/util/configs/xenon.h"
@@ -30,8 +31,6 @@
 
 #include <mutex>
 #include <time.h>
-
-#include <usdt/usdt.h>
 
 namespace HPHP {
 

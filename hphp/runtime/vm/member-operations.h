@@ -38,8 +38,7 @@
 #include "hphp/runtime/vm/type-constraint.h"
 #include "hphp/system/systemlib.h"
 #include "hphp/util/configs/php7.h"
-
-#include <usdt/usdt.h>
+#include "hphp/runtime/base/usdt.h"
 
 namespace HPHP {
 

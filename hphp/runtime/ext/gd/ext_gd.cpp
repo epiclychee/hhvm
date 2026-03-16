@@ -1552,15 +1552,15 @@ static heif_reader_grow_status heif_wait_for_file_size(
 
   auto stream = static_cast<File*>(userdata);
   if (!stream->seek(0, SEEK_END)) {
-    return heif_reader_grow_status_error;
+    return heif_reader_grow_status_size_beyond_eof;
   }
   const auto fileSize = stream->tell();
   if (fileSize < 0) {
-    return heif_reader_grow_status_error;
+    return heif_reader_grow_status_size_beyond_eof;
   }
   // Restore current position
   if (!stream->seek(currentPos, SEEK_SET)) {
-    return heif_reader_grow_status_error;
+    return heif_reader_grow_status_size_beyond_eof;
   }
   if (targetSize > fileSize) {
     return heif_reader_grow_status_size_beyond_eof;
