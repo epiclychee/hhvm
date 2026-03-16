@@ -2227,7 +2227,8 @@ res::Class builtin_class(const IIndex& index, SString name) {
 Type return_type_from_constraints(
   const php::Func& f,
   const std::function<Optional<res::Class>(SString)>& resolve,
-  const std::function<Optional<Type>()>& self
+  const std::function<Optional<Type>()>& self,
+  const TypeIntersectionConstraint* constraints
 ) {
   if (f.isGenerator) {
     if (f.isAsync) {
@@ -2265,7 +2266,7 @@ Type return_type_from_constraints(
     return ret;
   };
 
-  auto ret = process(f.retTypeConstraints);
+  auto ret = process(constraints ? *constraints : f.retTypeConstraints);
   if (f.hasInOutArgs && !ret.is(BBottom)) {
     std::vector<Type> types;
     types.reserve(f.params.size() + 1);
