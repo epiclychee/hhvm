@@ -378,6 +378,32 @@ inline const TypeIntersectionConstraint& Func::returnTypeConstraints() const {
   return shared()->m_retTypeConstraints;
 }
 
+inline const TypeIntersectionConstraint&
+Func::effectiveReturnTypeConstraints() const {
+  if (!m_monotonicReturnTypeInfo) return returnTypeConstraints();
+  return m_monotonicReturnTypeInfo->constraints;
+}
+
+inline VerifyRetKind
+Func::effectiveReturnTypeCheckKind(VerifyRetKind bytecodeKind) const {
+  if (!m_monotonicReturnTypeInfo) return bytecodeKind;
+  auto const inheritedKind = m_monotonicReturnTypeInfo->kind;
+  if (bytecodeKind == VerifyRetKind::All || inheritedKind == VerifyRetKind::All) {
+    return VerifyRetKind::All;
+  }
+  if (
+    bytecodeKind == VerifyRetKind::NonNull ||
+    inheritedKind == VerifyRetKind::NonNull
+  ) {
+    return VerifyRetKind::NonNull;
+  }
+  return VerifyRetKind::None;
+}
+
+inline bool Func::hasMonotonicInheritedReturnTypeChecks() const {
+  return m_monotonicReturnTypeInfo != nullptr;
+}
+
 inline const StringData* Func::returnUserType() const {
   return shared()->m_retUserType.get(m_unit);
 }

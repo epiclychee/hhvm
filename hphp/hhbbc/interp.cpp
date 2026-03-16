@@ -398,13 +398,30 @@ struct VerifyResult {
   bool coerced;
 };
 
+struct EffectiveRetContract {
+  const TypeIntersectionConstraint& constraints;
+  HPHP::VerifyRetKind kind;
+};
+
+EffectiveRetContract effectiveRetContract(ISS& env,
+                                          HPHP::VerifyRetKind bytecodeKind) {
+  auto const& func = *env.ctx.func;
+  auto const kind =
+    env.index.lookup_return_type_check_kind(env.ctx, func, bytecodeKind);
+  auto const& constraints =
+    env.index.lookup_return_type_constraints(env.ctx, func);
+  return EffectiveRetContract{constraints, kind};
+}
+
 template<typename TOp>
-Optional<VerifyResult> verifyRetNonNullImpl(ISS& env, const TOp& op, const Type& retTy) {
+Optional<VerifyResult> verifyRetNonNullImpl(ISS& env,
+                                            const TOp& op,
+                                            const Type& retTy,
+                                            const TypeIntersectionConstraint& constraints) {
   if (!retTy.couldBe(BInitNull)) {
     reduceRet(env, op, VerifyRetKind::None);
     return std::nullopt;
   }
-  auto const& constraints = env.ctx.func->retTypeConstraints;
   auto hasNonNullableType = std::any_of(
     constraints.range().begin(),
     constraints.range().end(),
@@ -495,11 +512,12 @@ Optional<VerifyResult> verifyRetAllImpl(ISS& env, const TypeIntersectionConstrai
 
 template <typename Op>
 Optional<VerifyResult> verifyRetImpl(ISS& env, HPHP::VerifyRetKind kind, const Op& op, const Type& type) {
-  switch (kind) {
+  auto const effective = effectiveRetContract(env, kind);
+  switch (effective.kind) {
     case HPHP::VerifyRetKind::All:
-      return verifyRetAllImpl(env, env.ctx.func->retTypeConstraints, true, op, type);
+      return verifyRetAllImpl(env, effective.constraints, true, op, type);
     case HPHP::VerifyRetKind::NonNull:
-      return verifyRetNonNullImpl(env, op, type);
+      return verifyRetNonNullImpl(env, op, type, effective.constraints);
     case HPHP::VerifyRetKind::None:
       return VerifyResult(type, true, false);
   }

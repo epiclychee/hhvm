@@ -526,6 +526,14 @@ The format can be found in hphp/tools/configs/generate_configs.rs
       returns something other than boolean false, the runtime will throw a
       fatal error.
 
+- int32_t Eval.MonotonicInheritedReturnTypeHints = 0, UNKNOWN, globaldata|compileroption(MonotonicInheritedReturnTypeHints)|postprocess
+
+  Controls monotonic inherited return verification for methods.
+  0 - Ignore inherited return declarations and enforce only the direct source
+      declaration emitted in bytecode.
+  1 - Enforce inherited return declarations in soft mode.
+  2 - Enforce inherited return declarations in hard mode.
+
 - bool Eval.EmitClsMethPointers = true, UNKNOWN, globaldata|unitcacheflag|hackc(hhbc)
 - uint32_t Eval.RaiseClassConversionNoticeSampleRate = 0, UNKNOWN, globaldata
 

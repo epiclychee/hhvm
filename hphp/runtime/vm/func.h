@@ -511,6 +511,22 @@ public:
    */
   const TypeIntersectionConstraint& returnTypeConstraints() const;
 
+  struct MonotonicReturnTypeInfo {
+    TypeIntersectionConstraint constraints;
+    VerifyRetKind kind{VerifyRetKind::None};
+    bool hasInherited{false};
+  };
+
+  /*
+   * Return constraints/effective return check mode after class-level
+   * monotonic inherited-return normalization.
+   */
+  const TypeIntersectionConstraint& effectiveReturnTypeConstraints() const;
+  VerifyRetKind effectiveReturnTypeCheckKind(VerifyRetKind bytecodeKind) const;
+  bool hasMonotonicInheritedReturnTypeChecks() const;
+  void setMonotonicReturnTypeInfo(MonotonicReturnTypeInfo info);
+  void clearMonotonicReturnTypeInfo();
+
   /*
    * The user-annotated Hack return type.
    */
@@ -1883,6 +1899,7 @@ private:
   RuntimeCoeffects m_requiredCoeffects{RuntimeCoeffects::none()};
   int16_t m_maxStackCells{0};
   Unit* const m_unit;
+  MonotonicReturnTypeInfo* m_monotonicReturnTypeInfo{nullptr};
   AtomicSharedPtr<SharedData> m_shared;
   // The lower 31 bits represent inout-ness of the corresponding parameter. The
   // highest bit is set if there is an inout parameter beyond the 0..31 range.
@@ -1897,8 +1914,8 @@ private:
   // should not be inherited from.
   jit::AtomicLowTCA m_prologueTable[1];
 };
-static constexpr size_t kFuncSize = debug ? (use_lowptr ? 72 : 96)
-                                          : (use_lowptr ? 64 : 88);
+static constexpr size_t kFuncSize = debug ? (use_lowptr ? 80 : 104)
+                                          : (use_lowptr ? 72 : 96);
 static_assert(CheckSize<Func, kFuncSize>(), "");
 
 ///////////////////////////////////////////////////////////////////////////////

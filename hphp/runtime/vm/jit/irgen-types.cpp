@@ -192,9 +192,12 @@ SSATmp* verifyTypeImpl(IRGS& env,
   auto const genFail = [&](SSATmp* val, SSATmp* thisCls = nullptr) {
     if (thisCls == nullptr) thisCls = genThisCls();
 
-    auto const failHard = Cfg::Repo::Authoritative
-      && !tc.isSoft()
-      && !tc.isThis();
+    auto const inheritedHard = tc.isInherited() &&
+      Cfg::Eval::MonotonicInheritedReturnTypeHints == 2;
+    auto const failHard = !tc.isThis() && (
+      inheritedHard ||
+      (Cfg::Repo::Authoritative && !tc.isSoft())
+    );
     fail(val, thisCls, failHard);
   };
 
@@ -1466,7 +1469,7 @@ void verifyRetType(IRGS& env, int32_t id, int32_t ind,
   auto const val = topC(env, BCSPRelOffset { ind }, DataTypeGeneric);
   assertx(ind >= 0);
   auto const& tic = (id == TypeConstraint::ReturnId)
-    ? func->returnTypeConstraints()
+    ? func->effectiveReturnTypeConstraints()
     : func->params()[id].typeConstraints;
 
   auto updatedVal = val;

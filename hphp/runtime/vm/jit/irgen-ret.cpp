@@ -236,7 +236,8 @@ IRSPRelOffset offsetToReturnSlot(IRGS& env) {
 }
 
 void emitVerifyReturn(IRGS& env, HPHP::VerifyRetKind kind, int32_t ind) {
-  switch(kind) {
+  auto const effectiveKind = curFunc(env)->effectiveReturnTypeCheckKind(kind);
+  switch (effectiveKind) {
     case HPHP::VerifyRetKind::All:
       verifyRetType(env, TypeConstraint::ReturnId, ind, false);
       break;

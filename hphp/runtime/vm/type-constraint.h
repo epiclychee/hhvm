@@ -232,6 +232,10 @@ struct TypeConstraint {
     m_flags = static_cast<TypeConstraintFlags>(m_flags | flags);
   }
 
+  void removeFlags(TypeConstraintFlags flags) {
+    m_flags = static_cast<TypeConstraintFlags>(m_flags & ~flags);
+  }
+
   /*
    * Returns: whether this constraint implies any runtime checking at
    * all.  If this function returns false, it means the parameter type
@@ -865,7 +869,7 @@ struct TypeIntersectionConstraint {
     for (auto const& tc : m_u.m_constraints) {
       if (!tc.isInherited()) return &tc;
     }
-    always_assert(false);
+    return &m_u.m_constraints[0];
   }
 
   bool isTop() const {

@@ -4485,6 +4485,19 @@ struct ClsCnsSubInfo {
   }
 };
 
+struct MonotonicReturnTypeInfo {
+  TypeIntersectionConstraint constraints;
+  VerifyRetKind kind{VerifyRetKind::None};
+  bool hasInherited{false};
+
+  template <typename SerDe> void serde(SerDe& sd) {
+    sd(constraints)
+      (kind)
+      (hasInherited)
+      ;
+  }
+};
+
 //////////////////////////////////////////////////////////////////////
 
 /*
@@ -4592,6 +4605,8 @@ struct ClassInfo {
    */
   folly::sorted_vector_map<SString, FuncFamilyOrSingle> methodFamilies;
   folly::sorted_vector_map<SString, FuncFamilyOrSingle> methodFamiliesAux;
+  folly::sorted_vector_map<SString, MonotonicReturnTypeInfo>
+    monotonicReturnTypes;
 
   ClassGraph classGraph;
 
@@ -4786,6 +4801,7 @@ struct ClassInfo2 {
    * BuildSubclassListJob::process_roots).
    */
   SStringToOneT<FuncFamilyEntry> methodFamilies;
+  SStringToOneT<MonotonicReturnTypeInfo> monotonicReturnTypes;
 
   /*
    * FuncInfo2s for the methods declared on this class (not
@@ -4885,6 +4901,7 @@ struct ClassInfo2 {
       (extraMethods, std::less<MethRef>{})
       (closures)
       (methodFamilies, string_data_lt{})
+      (monotonicReturnTypes, string_data_lt{})
       (funcInfos)
       (auxClassGraphs)
       (retained)
@@ -7200,6 +7217,81 @@ const php::Func* func_from_meth_ref(const AnalysisIndex::IndexData& index,
 }
 
 //////////////////////////////////////////////////////////////////////
+
+TypeConstraint normalizeMonotonicInheritedReturnConstraint(
+  TypeConstraint tc,
+  int mode
+) {
+  tc.addFlags(TypeConstraintFlags::Inherited);
+  if (mode == 1) {
+    tc.addFlags(TypeConstraintFlags::Soft);
+  } else if (mode == 2) {
+    tc.removeFlags(TypeConstraintFlags::Soft);
+  }
+  return tc;
+}
+
+TypeConstraint canonicalMonotonicConstraint(TypeConstraint tc) {
+  tc.removeFlags(
+    TypeConstraintFlags::Inherited |
+    TypeConstraintFlags::Soft |
+    TypeConstraintFlags::SingleTypeConstraint
+  );
+  return tc;
+}
+
+bool equivalentMonotonicConstraint(
+  const TypeConstraint& a,
+  const TypeConstraint& b
+) {
+  return canonicalMonotonicConstraint(a) == canonicalMonotonicConstraint(b);
+}
+
+bool appendMonotonicConstraint(
+  std::vector<TypeConstraint>& out,
+  TypeConstraint tc
+) {
+  for (auto& existing : out) {
+    if (!equivalentMonotonicConstraint(existing, tc)) continue;
+    if (existing.isSoft() && !tc.isSoft()) {
+      existing.removeFlags(TypeConstraintFlags::Soft);
+      if (tc.isInherited()) {
+        existing.addFlags(TypeConstraintFlags::Inherited);
+      }
+      return tc.isInherited();
+    }
+    return false;
+  }
+  out.emplace_back(std::move(tc));
+  return tc.isInherited();
+}
+
+bool asyncCompatibleForMonotonicReturn(const php::Func& impl,
+                                       const php::Func& decl) {
+  return impl.isAsync == decl.isAsync;
+}
+
+VerifyRetKind monotonicReturnCheckKind(
+  const std::vector<TypeConstraint>& constraints
+) {
+  for (auto const& tc : constraints) {
+    if (!tc.isCheckable()) continue;
+    return VerifyRetKind::All;
+  }
+  return VerifyRetKind::None;
+}
+
+VerifyRetKind combineReturnCheckKinds(VerifyRetKind a, VerifyRetKind b) {
+  if (a == VerifyRetKind::All || b == VerifyRetKind::All) {
+    return VerifyRetKind::All;
+  }
+  if (a == VerifyRetKind::NonNull || b == VerifyRetKind::NonNull) {
+    return VerifyRetKind::NonNull;
+  }
+  return VerifyRetKind::None;
+}
+
+////////////////////////////////////////////////////////////////////
 
 bool should_retain(const FuncInfo2& finfo,
                    bool better,
@@ -15300,6 +15392,89 @@ protected:
     return entry;
   }
 
+  static Optional<MonotonicReturnTypeInfo> make_monotonic_return_type_info(
+    const LocalIndex& index,
+    const ClassInfo2& cinfo,
+    SString name,
+    const php::Func& impl
+  ) {
+    auto const mode = Cfg::Eval::MonotonicInheritedReturnTypeHints;
+    if (mode <= 0) return std::nullopt;
+
+    std::vector<TypeConstraint> effectiveConstraints;
+    if (!impl.retTypeConstraints.isTop()) {
+      auto const direct = impl.retTypeConstraints.range();
+      effectiveConstraints.reserve(direct.size());
+      for (auto const& tc : direct) {
+        effectiveConstraints.emplace_back(tc);
+      }
+    }
+
+    auto const methFromRef = [&] (const MethRef& meth) -> const php::Func* {
+      auto const cls = folly::get_default(index.classes, meth.cls);
+      if (!cls) return nullptr;
+      assertx(meth.idx < cls->methods.size());
+      return cls->methods[meth.idx].get();
+    };
+
+    auto hasInheritedChecks = false;
+    hphp_fast_set<const php::Func*> seenAncestors;
+    auto const addInheritedFrom = [&] (const ClassInfo2* ancestorInfo) {
+      if (!ancestorInfo) return;
+      auto const it = ancestorInfo->methods.find(name);
+      if (it == end(ancestorInfo->methods)) return;
+      auto const ancestor = methFromRef(it->second.meth());
+      if (!ancestor) return;
+      if (!seenAncestors.emplace(ancestor).second) return;
+      if (!asyncCompatibleForMonotonicReturn(impl, *ancestor)) return;
+      if (ancestor->retTypeConstraints.isTop()) return;
+
+      for (auto const& tc : ancestor->retTypeConstraints.range()) {
+        hasInheritedChecks |= appendMonotonicConstraint(
+          effectiveConstraints,
+          normalizeMonotonicInheritedReturnConstraint(tc, mode)
+        );
+      }
+    };
+
+    for (auto const base : cinfo.classGraph.bases()) {
+      if (base.name()->tsame(cinfo.name)) continue;
+      addInheritedFrom(folly::get_default(index.classInfos, base.name()));
+    }
+    for (auto const iface : cinfo.classGraph.interfaces()) {
+      addInheritedFrom(folly::get_default(index.classInfos, iface.name()));
+    }
+
+    if (!hasInheritedChecks) return std::nullopt;
+    auto const kind = monotonicReturnCheckKind(effectiveConstraints);
+    return MonotonicReturnTypeInfo {
+      TypeIntersectionConstraint(std::move(effectiveConstraints)),
+      kind,
+      true
+    };
+  }
+
+  static void populate_monotonic_return_types(LocalIndex& index,
+                                              ClassInfo2& cinfo) {
+    cinfo.monotonicReturnTypes.clear();
+    if (Cfg::Eval::MonotonicInheritedReturnTypeHints <= 0) return;
+
+    auto const methFromRef = [&] (const MethRef& meth) -> const php::Func* {
+      auto const cls = folly::get_default(index.classes, meth.cls);
+      if (!cls) return nullptr;
+      assertx(meth.idx < cls->methods.size());
+      return cls->methods[meth.idx].get();
+    };
+
+    for (auto const& [name, mte] : cinfo.methods) {
+      auto const meth = methFromRef(mte.meth());
+      if (!meth) continue;
+      auto info = make_monotonic_return_type_info(index, cinfo, name, *meth);
+      if (!info) continue;
+      cinfo.monotonicReturnTypes.emplace(name, std::move(*info));
+    }
+  }
+
   // Calculate the data for each root (those which will we'll provide
   // outputs for) and update the ClassInfo or Split as appropriate.
   static void process_roots(
@@ -15573,6 +15748,8 @@ protected:
           cinfo->methodFamilies.emplace(name, std::move(entry)).second
         );
       }
+
+      populate_monotonic_return_types(index, *cinfo);
 
       for (auto& prop : cls.properties) {
         if (bool(prop.attrs & AttrNoImplicitNullable) &&
@@ -16763,6 +16940,17 @@ private:
       }
     };
 
+    auto const constraints = [&] () -> const TypeIntersectionConstraint* {
+      if (Cfg::Eval::MonotonicInheritedReturnTypeHints <= 0 || !f.cls) {
+        return nullptr;
+      }
+      auto const cinfo = folly::get_default(index.classInfos, f.cls->name);
+      if (!cinfo) return nullptr;
+      auto const it = cinfo->monotonicReturnTypes.find(f.name);
+      if (it == end(cinfo->monotonicReturnTypes)) return nullptr;
+      return &it->second.constraints;
+    }();
+
     auto ty = return_type_from_constraints(
       f,
       [&] (SString name) -> Optional<res::Class> {
@@ -16792,7 +16980,8 @@ private:
         auto const c = res::Class::get(cls.name);
         assertx(c.isComplete());
         return subCls(c, true);
-      }
+      },
+      constraints
     );
     FTRACE(3, "Initial return type for {}: {}\n", func_fullname(f), show(ty));
     return serialize_classes(std::move(ty));
@@ -19317,6 +19506,22 @@ void make_class_infos_local(
         cinfo->methodFamilies.shrink_to_fit();
         cinfo->methodFamiliesAux.shrink_to_fit();
 
+        {
+          std::vector<std::pair<SString, MonotonicReturnTypeInfo>> mono;
+          mono.reserve(rcinfo->monotonicReturnTypes.size());
+          for (auto& [name, info] : rcinfo->monotonicReturnTypes) {
+            mono.emplace_back(name, std::move(info));
+          }
+          std::sort(
+            begin(mono), end(mono),
+            [] (auto const& p1, auto const& p2) { return p1.first < p2.first; }
+          );
+          cinfo->monotonicReturnTypes.insert(
+            folly::sorted_unique, begin(mono), end(mono)
+          );
+          cinfo->monotonicReturnTypes.shrink_to_fit();
+        }
+
         if (!rcinfo->extraMethods.empty()) {
           // This is rare. Only happens with unflattened traits, so
           // taking a lock here is fine.
@@ -20104,6 +20309,7 @@ res::Func Index::rfunc_from_dcls(const DCls& dcls,
   auto missing = TriBool::Maybe;
   Func::Isect isect;
   const php::Func* singleMethod = nullptr;
+  const php::Class* singleContext = nullptr;
 
   auto const DEBUG_ONLY allIncomplete = !debug || std::all_of(
     begin(dcls.isect()), end(dcls.isect()),
@@ -20122,15 +20328,18 @@ res::Func Index::rfunc_from_dcls(const DCls& dcls,
         if (singleMethod) {
           assertx(missing != TriBool::Yes);
           assertx(isect.families.empty());
-          if (singleMethod != m.finfo->func) {
+          if (singleMethod != m.finfo->func ||
+              singleContext != m.contextCls) {
             assertx(allIncomplete);
             singleMethod = nullptr;
+            singleContext = nullptr;
             missing = TriBool::Yes;
           } else {
             missing = TriBool::No;
           }
         } else if (missing != TriBool::Yes) {
           singleMethod = m.finfo->func;
+          singleContext = m.contextCls;
           isect.families.clear();
           missing = TriBool::No;
         }
@@ -20154,19 +20363,23 @@ res::Func Index::rfunc_from_dcls(const DCls& dcls,
         if (singleMethod) {
           assertx(missing != TriBool::Yes);
           assertx(isect.families.empty());
-          if (singleMethod != m.finfo->func) {
+          if (singleMethod != m.finfo->func ||
+              singleContext != m.contextCls) {
             assertx(allIncomplete);
             singleMethod = nullptr;
+            singleContext = nullptr;
             missing = TriBool::Yes;
           }
         } else if (missing != TriBool::Yes) {
           singleMethod = m.finfo->func;
+          singleContext = m.contextCls;
           isect.families.clear();
         }
       },
       [&] (Func::MissingMethod) {
         assertx(IMPLIES(missing == TriBool::No, allIncomplete));
         singleMethod = nullptr;
+        singleContext = nullptr;
         isect.families.clear();
         missing = TriBool::Yes;
       },
@@ -20192,10 +20405,10 @@ res::Func Index::rfunc_from_dcls(const DCls& dcls,
     // using MethodOrMissing.
     if (missing == TriBool::Maybe) {
       return Func {
-        Func::MethodOrMissing { func_info(*m_data, singleMethod) }
+        Func::MethodOrMissing { func_info(*m_data, singleMethod), singleContext }
       };
     }
-    return Func { Func::Method { func_info(*m_data, singleMethod) } };
+    return Func { Func::Method { func_info(*m_data, singleMethod), singleContext } };
   }
   // We only got unresolved classes. If missing is TriBool::Yes, the
   // function doesn't exist. Otherwise be pessimistic.
@@ -20269,7 +20482,7 @@ res::Func Index::resolve_method(Context ctx,
     if (auto const ff = entry.funcFamily()) {
       return Func { Func::MethodFamily { ff, !includeNonRegular } };
     } else if (auto const f = entry.func()) {
-      return Func { Func::MethodOrMissing { func_info(*m_data, f) } };
+      return Func { Func::MethodOrMissing { func_info(*m_data, f), f->cls } };
     } else {
       return Func { Func::MissingMethod { maybeCls, name } };
     }
@@ -20322,7 +20535,7 @@ res::Func Index::resolve_method(Context ctx,
       if (auto const ff = entry.funcFamily()) {
         return Func { Func::MethodFamily { ff, true } };
       } else if (auto const func = entry.func()) {
-        return Func { Func::Method { func_info(*m_data, func) } };
+        return Func { Func::Method { func_info(*m_data, func), cinfo->cls } };
       } else {
         always_assert(false);
       }
@@ -20335,11 +20548,15 @@ res::Func Index::resolve_method(Context ctx,
     // and they have special inheritance semantics.
     if (is_special_method_name(name)) {
       // If we know the class exactly, we can use ftarget.
-      if (isExact) return Func { Func::Method { func_info(*m_data, ftarget) } };
+      if (isExact) {
+        return Func { Func::Method { func_info(*m_data, ftarget), cinfo->cls } };
+      }
       // The method isn't overwritten, but they don't inherit, so it
       // could be missing.
       if (meth.attrs & AttrNoOverride) {
-        return Func { Func::MethodOrMissing { func_info(*m_data, ftarget) } };
+        return Func {
+          Func::MethodOrMissing { func_info(*m_data, ftarget), cinfo->cls }
+        };
       }
       // Otherwise be pessimistic.
       return Func { Func::MethodName { cinfo->cls->name, name } };
@@ -20356,7 +20573,7 @@ res::Func Index::resolve_method(Context ctx,
       // private method (defined on this class), then that's what
       // we'll call.
       if ((meth.attrs & AttrPrivate) && meth.topLevel()) {
-        return Func { Func::Method { func_info(*m_data, ftarget) } };
+        return Func { Func::Method { func_info(*m_data, ftarget), cinfo->cls } };
       }
     } else if ((meth.attrs & AttrPrivate) || meth.hasPrivateAncestor()) {
       // Otherwise the context doesn't match the current class. If the
@@ -20388,7 +20605,7 @@ res::Func Index::resolve_method(Context ctx,
         return nullptr;
       }();
       if (ancestor) {
-        return Func { Func::Method { func_info(*m_data, ancestor) } };
+        return Func { Func::Method { func_info(*m_data, ancestor), ancestor->cls } };
       }
     }
     // If none of the above cases trigger, we still might call a
@@ -20414,7 +20631,7 @@ res::Func Index::resolve_method(Context ctx,
         if (!cinfo->classGraph.mightHaveRegularSubclass()) {
           return Func { Func::MissingMethod { cinfo->cls->name, name } };
         }
-        return Func { Func::Method { func_info(*m_data, ftarget) } };
+        return Func { Func::Method { func_info(*m_data, ftarget), cinfo->cls } };
       }
       // We can't use the base class (because it's non-regular), but
       // the method is overridden by a regular subclass.
@@ -20429,8 +20646,10 @@ res::Func Index::resolve_method(Context ctx,
           return Func { Func::MethodFamily { ff, true } };
         } else if (auto const f = aux.func()) {
           return aux.isComplete()
-            ? Func { Func::Method { func_info(*m_data, f) } }
-            : Func { Func::MethodOrMissing { func_info(*m_data, f) } };
+            ? Func { Func::Method { func_info(*m_data, f), cinfo->cls } }
+            : Func {
+                Func::MethodOrMissing { func_info(*m_data, f), cinfo->cls }
+              };
         } else {
           return Func { Func::MissingMethod { cinfo->cls->name, name } };
         }
@@ -20444,7 +20663,7 @@ res::Func Index::resolve_method(Context ctx,
       // the method isn't overridden we know it must be just ftarget
       // (the override bits include it being missing in a subclass, so
       // we know it cannot be missing either).
-      return Func { Func::Method { func_info(*m_data, ftarget) } };
+      return Func { Func::Method { func_info(*m_data, ftarget), cinfo->cls } };
     }
 
     // Look up the entry in the normal method family table and use
@@ -20458,8 +20677,10 @@ res::Func Index::resolve_method(Context ctx,
       return Func { Func::MethodFamily { ff, !includeNonRegular } };
     } else if (auto const f = fam.func()) {
       return (!includeNonRegular || fam.isComplete())
-        ? Func { Func::Method { func_info(*m_data, f) } }
-        : Func { Func::MethodOrMissing { func_info(*m_data, f) } };
+        ? Func { Func::Method { func_info(*m_data, f), cinfo->cls } }
+        : Func {
+            Func::MethodOrMissing { func_info(*m_data, f), cinfo->cls }
+          };
     } else {
       always_assert(false);
     }
@@ -20536,7 +20757,7 @@ res::Func Index::resolve_ctor(const Type& obj) const {
             Func::MissingMethod { cinfo->cls->name, s_construct.get() }
           };
         }
-        return Func { Func::Method { func_info(*m_data, ftarget) } };
+        return Func { Func::Method { func_info(*m_data, ftarget), cinfo->cls } };
       }
 
       // If this isn't a regular class, we need to check the "aux"
@@ -20550,8 +20771,10 @@ res::Func Index::resolve_ctor(const Type& obj) const {
             return Func { Func::MethodFamily { ff, true } };
           } else if (auto const f = aux.func()) {
             return aux.isComplete()
-              ? Func { Func::Method { func_info(*m_data, f) } }
-              : Func { Func::MethodOrMissing { func_info(*m_data, f) } };
+              ? Func { Func::Method { func_info(*m_data, f), cinfo->cls } }
+              : Func {
+                  Func::MethodOrMissing { func_info(*m_data, f), cinfo->cls }
+                };
           } else {
             // Ctor doesn't exist in any regular subclasses. This can
             // happen with interfaces. The ctor might get the default
@@ -20576,7 +20799,7 @@ res::Func Index::resolve_ctor(const Type& obj) const {
       } else if (auto const f = fam.func()) {
         // Since we're looking at the regular subset, we can assume
         // the set is complete, regardless of the flag on fam.
-        return Func { Func::Method { func_info(*m_data, f) } };
+        return Func { Func::Method { func_info(*m_data, f), cinfo->cls } };
       } else {
         always_assert(false);
       }
@@ -20603,7 +20826,7 @@ res::Func Index::resolve_func(SString name) const {
 
 res::Func Index::resolve_func_or_method(const php::Func& f) const {
   if (!f.cls) return res::Func { res::Func::Fun { func_info(*m_data, &f) } };
-  return res::Func { res::Func::Method { func_info(*m_data, &f) } };
+  return res::Func { res::Func::Method { func_info(*m_data, &f), f.cls } };
 }
 
 bool Index::func_depends_on_arg(const php::Func* func, size_t arg) const {
@@ -21040,6 +21263,70 @@ Type Index::lookup_constant(Context ctx, SString cnsName) const {
   return lookup_return_type(ctx, nullptr, rfunc, Dep::ConstVal).t;
 }
 
+namespace {
+
+VerifyRetKind directReturnCheckKind(const php::Func& func) {
+  if (func.retTypeConstraints.isTop()) return VerifyRetKind::None;
+  for (auto const& tc : func.retTypeConstraints.range()) {
+    if (tc.isCheckable()) return VerifyRetKind::All;
+  }
+  return VerifyRetKind::None;
+}
+
+const MonotonicReturnTypeInfo* monotonic_return_type_info(
+  const IndexData& data,
+  const php::Class* cls,
+  const php::Func& func
+) {
+  if (Cfg::Eval::MonotonicInheritedReturnTypeHints <= 0 || !cls || !func.cls) {
+    return nullptr;
+  }
+  auto const cinfo = folly::get_default(data.classInfo, cls->name);
+  if (!cinfo) return nullptr;
+  auto const meth = folly::get_ptr(cinfo->methods, func.name);
+  if (!meth) return nullptr;
+  if (func_from_meth_ref(data, meth->meth()) != &func) return nullptr;
+  return folly::get_ptr(cinfo->monotonicReturnTypes, func.name);
+}
+
+const MonotonicReturnTypeInfo* monotonic_return_type_info(
+  const AnalysisIndex::IndexData& data,
+  const php::Class* cls,
+  const php::Func& func
+) {
+  if (Cfg::Eval::MonotonicInheritedReturnTypeHints <= 0 || !cls || !func.cls) {
+    return nullptr;
+  }
+  auto const cinfo = cls->cinfo;
+  if (!cinfo) return nullptr;
+  auto const meth = folly::get_ptr(cinfo->methods, func.name);
+  if (!meth) return nullptr;
+  auto const methFunc = func_from_meth_ref(data, meth->meth());
+  if (!methFunc || methFunc != &func) return nullptr;
+  return folly::get_ptr(cinfo->monotonicReturnTypes, func.name);
+}
+
+Type monotonic_return_constraint_type(
+  const IIndex& index,
+  const php::Func& func,
+  const php::Class& ctxCls,
+  const TypeIntersectionConstraint& constraints
+) {
+  return return_type_from_constraints(
+    func,
+    [&] (SString name) { return index.resolve_class(name); },
+    [&] () -> Optional<Type> {
+      if (ctxCls.attrs & AttrTrait) return std::nullopt;
+      auto const c = index.resolve_class(ctxCls);
+      if (!c) return std::nullopt;
+      return subCls(*c, true);
+    },
+    &constraints
+  );
+}
+
+}
+
 Index::ReturnType
 Index::lookup_foldable_return_type(Context ctx,
                                    const CallContext& calleeCtx) const {
@@ -21150,6 +21437,22 @@ Index::ReturnType Index::lookup_return_type(Context ctx,
                                             Dep dep) const {
   using R = ReturnType;
 
+  auto const applyMonotonicContextBound = [&] (R ret,
+                                               const php::Func& func,
+                                               const php::Class* contextCls) {
+    if (!contextCls || !func.cls) return ret;
+    auto const info = monotonic_return_type_info(*m_data, contextCls, func);
+    if (!info || !info->hasInherited) return ret;
+    auto const bound = monotonic_return_constraint_type(
+      IndexAdaptor{*this},
+      func,
+      *contextCls,
+      info->constraints
+    );
+    ret.t = intersection_of(std::move(ret.t), unctx(bound));
+    return ret;
+  };
+
   auto const funcFamily = [&] (FuncFamily* fam, bool regularOnly) {
     add_dependency(*m_data, fam, ctx, dep);
     auto ty = fam->infoFor(regularOnly).m_returnTy.get(
@@ -21160,8 +21463,14 @@ Index::ReturnType Index::lookup_return_type(Context ctx,
           if (regularOnly && !pf.inRegular()) continue;
           auto const finfo = func_info(*m_data, pf.ptr());
           if (!finfo->func) return R{ TInitCell, false };
-          ret |= finfo->returnTy;
-          effectFree &= finfo->effectFree;
+          auto methRet = R{finfo->returnTy, finfo->effectFree};
+          methRet = applyMonotonicContextBound(
+            std::move(methRet),
+            *pf.ptr(),
+            pf.ptr()->cls
+          );
+          ret |= std::move(methRet.t);
+          effectFree &= methRet.effectFree;
           if (!ret.strictSubtypeOf(BInitCell) && !effectFree) break;
         }
         return R{ std::move(ret), effectFree };
@@ -21169,16 +21478,24 @@ Index::ReturnType Index::lookup_return_type(Context ctx,
     );
     return R{ unctx(std::move(ty.t)), ty.effectFree };
   };
-  auto const meth = [&] (const php::Func* func) {
+  auto const meth = [&] (const php::Func* func, const php::Class* contextCls) {
     if (methods) {
       if (auto ret = methods->lookupReturnType(*func)) {
-        return R{ unctx(std::move(ret->t)), ret->effectFree };
+        return applyMonotonicContextBound(
+          R{ unctx(std::move(ret->t)), ret->effectFree },
+          *func,
+          contextCls
+        );
       }
     }
     add_dependency(*m_data, func, ctx, dep);
     auto const finfo = func_info(*m_data, func);
     if (!finfo->func) return R{ TInitCell, false };
-    return R{ unctx(finfo->returnTy), finfo->effectFree };
+    return applyMonotonicContextBound(
+      R{ unctx(finfo->returnTy), finfo->effectFree },
+      *func,
+      contextCls
+    );
   };
 
   return match<R>(
@@ -21189,11 +21506,15 @@ Index::ReturnType Index::lookup_return_type(Context ctx,
       add_dependency(*m_data, f.finfo->func, ctx, dep);
       return R{ unctx(f.finfo->returnTy), f.finfo->effectFree };
     },
-    [&] (res::Func::Method m)          { return meth(m.finfo->func); },
+    [&] (res::Func::Method m)          {
+      return meth(m.finfo->func, m.contextCls);
+    },
     [&] (res::Func::MethodFamily fam)  {
       return funcFamily(fam.family, fam.regularOnly);
     },
-    [&] (res::Func::MethodOrMissing m) { return meth(m.finfo->func); },
+    [&] (res::Func::MethodOrMissing m) {
+      return meth(m.finfo->func, m.contextCls);
+    },
     [&] (res::Func::MissingFunc)       { return R{ TBottom, false }; },
     [&] (res::Func::MissingMethod)     { return R{ TBottom, false }; },
     [&] (const res::Func::Isect& i) {
@@ -21222,6 +21543,22 @@ Index::ReturnType Index::lookup_return_type(Context caller,
                                             Dep dep) const {
   using R = ReturnType;
 
+  auto const applyMonotonicContextBound = [&] (R ret,
+                                               const php::Func& func,
+                                               const php::Class* contextCls) {
+    if (!contextCls || !func.cls) return ret;
+    auto const info = monotonic_return_type_info(*m_data, contextCls, func);
+    if (!info || !info->hasInherited) return ret;
+    auto const bound = monotonic_return_constraint_type(
+      IndexAdaptor{*this},
+      func,
+      *contextCls,
+      info->constraints
+    );
+    ret.t = intersection_of(std::move(ret.t), bound);
+    return ret;
+  };
+
   auto const funcFamily = [&] (FuncFamily* fam, bool regularOnly) {
     add_dependency(*m_data, fam, caller, dep);
     auto ret = fam->infoFor(regularOnly).m_returnTy.get(
@@ -21232,8 +21569,14 @@ Index::ReturnType Index::lookup_return_type(Context caller,
           if (regularOnly && !pf.inRegular()) continue;
           auto const finfo = func_info(*m_data, pf.ptr());
           if (!finfo->func) return R{ TInitCell, false };
-          ty |= finfo->returnTy;
-          effectFree &= finfo->effectFree;
+          auto methRet = R{finfo->returnTy, finfo->effectFree};
+          methRet = applyMonotonicContextBound(
+            std::move(methRet),
+            *pf.ptr(),
+            pf.ptr()->cls
+          );
+          ty |= std::move(methRet.t);
+          effectFree &= methRet.effectFree;
           if (!ty.strictSubtypeOf(BInitCell) && !effectFree) break;
         }
         return R{ std::move(ty), effectFree };
@@ -21244,18 +21587,26 @@ Index::ReturnType Index::lookup_return_type(Context caller,
       ret.effectFree
     };
   };
-  auto const meth = [&] (const php::Func* func) {
+  auto const meth = [&] (const php::Func* func, const php::Class* contextCls) {
     auto const finfo = func_info(*m_data, func);
     if (!finfo->func) return R{ TInitCell, false };
 
     auto returnType = [&] {
       if (methods) {
         if (auto ret = methods->lookupReturnType(*func)) {
-          return *ret;
+          return applyMonotonicContextBound(
+            std::move(*ret),
+            *func,
+            contextCls
+          );
         }
       }
       add_dependency(*m_data, func, caller, dep);
-      return R{ finfo->returnTy, finfo->effectFree };
+      return applyMonotonicContextBound(
+        R{ finfo->returnTy, finfo->effectFree },
+        *func,
+        contextCls
+      );
     }();
 
     return context_sensitive_return_type(
@@ -21283,11 +21634,15 @@ Index::ReturnType Index::lookup_return_type(Context caller,
         R{ f.finfo->returnTy, f.finfo->effectFree }
       );
     },
-    [&] (res::Func::Method m)          { return meth(m.finfo->func); },
+    [&] (res::Func::Method m)          {
+      return meth(m.finfo->func, m.contextCls);
+    },
     [&] (res::Func::MethodFamily fam)  {
       return funcFamily(fam.family, fam.regularOnly);
     },
-    [&] (res::Func::MethodOrMissing m) { return meth(m.finfo->func); },
+    [&] (res::Func::MethodOrMissing m) {
+      return meth(m.finfo->func, m.contextCls);
+    },
     [&] (res::Func::MissingFunc)       { return R { TBottom, false }; },
     [&] (res::Func::MissingMethod)     { return R { TBottom, false }; },
     [&] (const res::Func::Isect& i) {
@@ -21319,6 +21674,38 @@ Index::lookup_return_type_raw(const php::Func* f) const {
     };
   }
   return { ReturnType{ TInitCell, false }, 0 };
+}
+
+Index::EffectiveReturnTypeInfo
+Index::lookup_effective_return_type_info(Context ctx,
+                                         const php::Func& func) const {
+  auto const info = monotonic_return_type_info(*m_data, ctx.cls, func);
+  if (info) {
+    return EffectiveReturnTypeInfo{
+      info->constraints,
+      info->kind,
+      info->hasInherited
+    };
+  }
+  return EffectiveReturnTypeInfo{
+    func.retTypeConstraints,
+    directReturnCheckKind(func),
+    false
+  };
+}
+
+const TypeIntersectionConstraint&
+Index::lookup_return_type_constraints(Context ctx,
+                                      const php::Func& func) const {
+  return lookup_effective_return_type_info(ctx, func).constraints;
+}
+
+VerifyRetKind
+Index::lookup_return_type_check_kind(Context ctx,
+                                     const php::Func& func,
+                                     VerifyRetKind bytecodeKind) const {
+  auto const effective = lookup_effective_return_type_info(ctx, func);
+  return combineReturnCheckKinds(bytecodeKind, effective.kind);
 }
 
 CompactVector<Type>
@@ -26894,7 +27281,7 @@ Optional<res::Class> AnalysisIndex::resolve_class(const php::Class& cls) const {
 res::Func AnalysisIndex::resolve_func_or_method(const php::Func& f) const {
   m_data->deps->add(f);
   if (!f.cls) return res::Func { res::Func::Fun2 { &func_info(*m_data, f) } };
-  return res::Func { res::Func::Method2 { &func_info(*m_data, f) } };
+  return res::Func { res::Func::Method2 { &func_info(*m_data, f), f.cls } };
 }
 
 Type AnalysisIndex::lookup_constant(SString name) const {
@@ -27797,22 +28184,45 @@ Index::ReturnType AnalysisIndex::lookup_return_type(MethodsInfo* methods,
                                                     res::Func rfunc) const {
   using R = Index::ReturnType;
 
+  auto const applyMonotonicContextBound = [&] (R ret,
+                                               const php::Func& func,
+                                               const php::Class* contextCls) {
+    if (!contextCls || !func.cls) return ret;
+    auto const info = monotonic_return_type_info(*m_data, contextCls, func);
+    if (!info || !info->hasInherited) return ret;
+    auto const bound = monotonic_return_constraint_type(
+      AnalysisIndexAdaptor{*this},
+      func,
+      *contextCls,
+      info->constraints
+    );
+    ret.t = intersection_of(std::move(ret.t), unctx(bound));
+    return ret;
+  };
+
   auto const remove = [] (R ret) {
     return R { unctx(std::move(ret.t)), ret.effectFree };
   };
 
-  auto const fromFInfo = [&] (const FuncInfo2& finfo) {
+  auto const fromFInfo = [&] (const FuncInfo2& finfo,
+                              const php::Class* contextCls) {
     m_data->deps->add(*finfo.func, AnalysisDeps::Type::RetType);
-    return remove(return_type_for_func(*finfo.func));
+    auto ret = remove(return_type_for_func(*finfo.func));
+    return applyMonotonicContextBound(std::move(ret), *finfo.func, contextCls);
   };
 
-  auto const meth = [&] (const FuncInfo2& finfo) {
+  auto const meth = [&] (const FuncInfo2& finfo,
+                         const php::Class* contextCls) {
     if (methods) {
       if (auto ret = methods->lookupReturnType(*finfo.func)) {
-        return remove(std::move(*ret));
+        return applyMonotonicContextBound(
+          remove(std::move(*ret)),
+          *finfo.func,
+          contextCls
+        );
       }
     }
-    return fromFInfo(finfo);
+    return fromFInfo(finfo, contextCls);
   };
 
   return match<R>(
@@ -27837,10 +28247,12 @@ Index::ReturnType AnalysisIndex::lookup_return_type(MethodsInfo* methods,
     [&] (res::Func::MissingFunc)        { return R{ TBottom, false }; },
     [&] (res::Func::MissingMethod)      { return R{ TBottom, false }; },
     [&] (const res::Func::Isect&)       -> R { always_assert(false); },
-    [&] (res::Func::Fun2 f)             { return fromFInfo(*f.finfo); },
-    [&] (res::Func::Method2 m)          { return meth(*m.finfo); },
+    [&] (res::Func::Fun2 f)             { return fromFInfo(*f.finfo, nullptr); },
+    [&] (res::Func::Method2 m)          { return meth(*m.finfo, m.contextCls); },
     [&] (res::Func::MethodFamily2)      -> R { always_assert(false); },
-    [&] (res::Func::MethodOrMissing2 m) { return meth(*m.finfo); },
+    [&] (res::Func::MethodOrMissing2 m) {
+      return meth(*m.finfo, m.contextCls);
+    },
     [&] (const res::Func::Isect2&)      -> R { always_assert(false); }
   );
 }
@@ -27852,6 +28264,22 @@ AnalysisIndex::lookup_return_type(MethodsInfo* methods,
                                   res::Func rfunc) const {
   using R = Index::ReturnType;
 
+  auto const applyMonotonicContextBound = [&] (R ret,
+                                               const php::Func& func,
+                                               const php::Class* contextCls) {
+    if (!contextCls || !func.cls) return ret;
+    auto const info = monotonic_return_type_info(*m_data, contextCls, func);
+    if (!info || !info->hasInherited) return ret;
+    auto const bound = monotonic_return_constraint_type(
+      AnalysisIndexAdaptor{*this},
+      func,
+      *contextCls,
+      info->constraints
+    );
+    ret.t = intersection_of(std::move(ret.t), bound);
+    return ret;
+  };
+
   auto const contextual = [&] (const FuncInfo2& finfo, R ret) {
     return context_sensitive_return_type(
       *m_data,
@@ -27860,18 +28288,27 @@ AnalysisIndex::lookup_return_type(MethodsInfo* methods,
     );
   };
 
-  auto const fromFInfo = [&] (const FuncInfo2& finfo) {
+  auto const fromFInfo = [&] (const FuncInfo2& finfo,
+                              const php::Class* contextCls) {
     m_data->deps->add(*finfo.func, AnalysisDeps::Type::RetType);
-    return contextual(finfo, return_type_for_func(*finfo.func));
+    auto ret = return_type_for_func(*finfo.func);
+    ret = applyMonotonicContextBound(std::move(ret), *finfo.func, contextCls);
+    return contextual(finfo, std::move(ret));
   };
 
-  auto const meth = [&] (const FuncInfo2& finfo) {
+  auto const meth = [&] (const FuncInfo2& finfo,
+                         const php::Class* contextCls) {
     if (methods) {
       if (auto ret = methods->lookupReturnType(*finfo.func)) {
-        return contextual(finfo, std::move(*ret));
+        auto out = applyMonotonicContextBound(
+          std::move(*ret),
+          *finfo.func,
+          contextCls
+        );
+        return contextual(finfo, std::move(out));
       }
     }
-    return fromFInfo(finfo);
+    return fromFInfo(finfo, contextCls);
   };
 
   return match<R>(
@@ -27896,10 +28333,12 @@ AnalysisIndex::lookup_return_type(MethodsInfo* methods,
     [&] (res::Func::MissingFunc)        { return R{ TBottom, false }; },
     [&] (res::Func::MissingMethod)      { return R{ TBottom, false }; },
     [&] (const res::Func::Isect&)       -> R { always_assert(false); },
-    [&] (res::Func::Fun2 f)             { return fromFInfo(*f.finfo); },
-    [&] (res::Func::Method2 m)          { return meth(*m.finfo); },
+    [&] (res::Func::Fun2 f)             { return fromFInfo(*f.finfo, nullptr); },
+    [&] (res::Func::Method2 m)          { return meth(*m.finfo, m.contextCls); },
     [&] (res::Func::MethodFamily2)      -> R { always_assert(false); },
-    [&] (res::Func::MethodOrMissing2 m) { return meth(*m.finfo); },
+    [&] (res::Func::MethodOrMissing2 m) {
+      return meth(*m.finfo, m.contextCls);
+    },
     [&] (const res::Func::Isect2&)      -> R { always_assert(false); }
   );
 }
@@ -28043,6 +28482,38 @@ AnalysisIndex::lookup_return_type_raw(const php::Func& f) const {
   );
 }
 
+Index::EffectiveReturnTypeInfo
+AnalysisIndex::lookup_effective_return_type_info(Context ctx,
+                                                 const php::Func& func) const {
+  auto const info = monotonic_return_type_info(*m_data, ctx.cls, func);
+  if (info) {
+    return Index::EffectiveReturnTypeInfo{
+      info->constraints,
+      info->kind,
+      info->hasInherited
+    };
+  }
+  return Index::EffectiveReturnTypeInfo{
+    func.retTypeConstraints,
+    directReturnCheckKind(func),
+    false
+  };
+}
+
+const TypeIntersectionConstraint&
+AnalysisIndex::lookup_return_type_constraints(Context ctx,
+                                              const php::Func& func) const {
+  return lookup_effective_return_type_info(ctx, func).constraints;
+}
+
+VerifyRetKind
+AnalysisIndex::lookup_return_type_check_kind(Context ctx,
+                                             const php::Func& func,
+                                             VerifyRetKind bytecodeKind) const {
+  auto const effective = lookup_effective_return_type_info(ctx, func);
+  return combineReturnCheckKinds(bytecodeKind, effective.kind);
+}
+
 CompactVector<Type>
 AnalysisIndex::lookup_closure_use_vars(const php::Func& func) const {
   assertx(func.isClosureBody);
@@ -28179,6 +28650,7 @@ res::Func AnalysisIndex::rfunc_from_dcls(const DCls& dcls,
   auto missing = TriBool::Maybe;
   Func::Isect2 isect;
   const php::Func* singleMethod = nullptr;
+  const php::Class* singleContext = nullptr;
 
   auto const onFunc = [&] (Func func) {
     match(
@@ -28190,6 +28662,7 @@ res::Func AnalysisIndex::rfunc_from_dcls(const DCls& dcls,
       [&] (Func::MissingMethod) {
         assertx(missing != TriBool::No);
         singleMethod = nullptr;
+        singleContext = nullptr;
         isect.families.clear();
         missing = TriBool::Yes;
       },
@@ -28200,14 +28673,17 @@ res::Func AnalysisIndex::rfunc_from_dcls(const DCls& dcls,
         if (singleMethod) {
           assertx(missing != TriBool::Yes);
           assertx(isect.families.empty());
-          if (singleMethod != m.finfo->func) {
+          if (singleMethod != m.finfo->func ||
+              singleContext != m.contextCls) {
             singleMethod = nullptr;
+            singleContext = nullptr;
             missing = TriBool::Yes;
           } else {
             missing = TriBool::No;
           }
         } else if (missing != TriBool::Yes) {
           singleMethod = m.finfo->func;
+          singleContext = m.contextCls;
           isect.families.clear();
           missing = TriBool::No;
         }
@@ -28217,12 +28693,15 @@ res::Func AnalysisIndex::rfunc_from_dcls(const DCls& dcls,
         if (singleMethod) {
           assertx(missing != TriBool::Yes);
           assertx(isect.families.empty());
-          if (singleMethod != m.finfo->func) {
+          if (singleMethod != m.finfo->func ||
+              singleContext != m.contextCls) {
             singleMethod = nullptr;
+            singleContext = nullptr;
             missing = TriBool::Yes;
           }
         } else if (missing != TriBool::Yes) {
           singleMethod = m.finfo->func;
+          singleContext = m.contextCls;
           isect.families.clear();
         }
       },
@@ -28311,10 +28790,15 @@ res::Func AnalysisIndex::rfunc_from_dcls(const DCls& dcls,
     // using MethodOrMissing.
     if (missing == TriBool::Maybe) {
       return Func {
-        Func::MethodOrMissing2 { &func_info(*m_data, *singleMethod) }
+        Func::MethodOrMissing2 {
+          &func_info(*m_data, *singleMethod),
+          singleContext
+        }
       };
     }
-    return Func { Func::Method2 { &func_info(*m_data, *singleMethod) } };
+    return Func {
+      Func::Method2 { &func_info(*m_data, *singleMethod), singleContext }
+    };
   }
   // We only got unresolved classes. If missing is TriBool::Yes, the
   // function doesn't exist. Otherwise be pessimistic.
@@ -28388,7 +28872,9 @@ res::Func AnalysisIndex::resolve_method(const Type& thisType,
       if (!check) return nullptr;
       return func_from_meth_ref(*m_data, meth->meth());
     }();
-    if (priv) return Func { Func::Method2 { &func_info(*m_data, *priv) } };
+    if (priv) {
+      return Func { Func::Method2 { &func_info(*m_data, *priv), priv->cls } };
+    }
 
     auto const meth = folly::get_ptr(cinfo->methods, name);
     if (!meth) {
@@ -28434,7 +28920,7 @@ res::Func AnalysisIndex::resolve_method(const Type& thisType,
           m_data->deps->add(e.m_regular);
           auto const func = func_from_meth_ref(*m_data, e.m_regular);
           if (!func) return general(cinfo->name, false);
-          return Func { Func::Method2 { &func_info(*m_data, *func) } };
+          return Func { Func::Method2 { &func_info(*m_data, *func), cinfo->cls } };
         },
         [&] (const FuncFamilyEntry::FFAndNone&) -> Func {
           always_assert(false);
@@ -28443,7 +28929,7 @@ res::Func AnalysisIndex::resolve_method(const Type& thisType,
           m_data->deps->add(e.m_all);
           auto const func = func_from_meth_ref(*m_data, e.m_all);
           if (!func) return general(cinfo->name, false);
-          return Func { Func::Method2 { &func_info(*m_data, *func) } };
+          return Func { Func::Method2 { &func_info(*m_data, *func), cinfo->cls } };
         },
         [&] (const FuncFamilyEntry::SingleAndNone&) -> Func {
           always_assert(false);
@@ -28465,12 +28951,14 @@ res::Func AnalysisIndex::resolve_method(const Type& thisType,
     if (is_special_method_name(name)) {
       // If we know the class exactly, we can use ftarget.
       if (isExact) {
-        return Func { Func::Method2 { &func_info(*m_data, *func) } };
+        return Func { Func::Method2 { &func_info(*m_data, *func), cinfo->cls } };
       }
       // The method isn't overwritten, but they don't inherit, so it
       // could be missing.
       if (meth->attrs & AttrNoOverride) {
-        return Func { Func::MethodOrMissing2 { &func_info(*m_data, *func) } };
+        return Func {
+          Func::MethodOrMissing2 { &func_info(*m_data, *func), cinfo->cls }
+        };
       }
       // Otherwise be pessimistic.
       return Func { Func::MethodName { cinfo->name, name } };
@@ -28488,7 +28976,7 @@ res::Func AnalysisIndex::resolve_method(const Type& thisType,
       // private method (defined on this class), then that's what
       // we'll call.
       if ((meth->attrs & AttrPrivate) && meth->topLevel()) {
-        return Func { Func::Method2 { &func_info(*m_data, *func) } };
+        return Func { Func::Method2 { &func_info(*m_data, *func), cinfo->cls } };
       }
     } else if ((meth->attrs & AttrPrivate) || meth->hasPrivateAncestor()) {
       // Otherwise the context doesn't match the current class. If the
@@ -28522,7 +29010,9 @@ res::Func AnalysisIndex::resolve_method(const Type& thisType,
         return nullptr;
       }();
       if (ancestor) {
-        return Func { Func::Method2 { &func_info(*m_data, *ancestor) } };
+        return Func {
+          Func::Method2 { &func_info(*m_data, *ancestor), ancestor->cls }
+        };
       } else if (conservative) {
         return Func { Func::MethodName { cinfo->name, name } };
       }
@@ -28547,7 +29037,7 @@ res::Func AnalysisIndex::resolve_method(const Type& thisType,
         if (!cinfo->classGraph.mightHaveRegularSubclass()) {
           return Func { Func::MissingMethod { cinfo->name, name } };
         }
-        return Func { Func::Method2 { &func_info(*m_data, *func) } };
+        return Func { Func::Method2 { &func_info(*m_data, *func), cinfo->cls } };
       }
       // Otherwise, fall through into the general case.
     } else if (isExact ||
@@ -28557,7 +29047,7 @@ res::Func AnalysisIndex::resolve_method(const Type& thisType,
       // the method isn't overridden we know it must be just func (the
       // override bits include it being missing in a subclass, so we
       // know it cannot be missing either).
-      return Func { Func::Method2 { &func_info(*m_data, *func) } };
+      return Func { Func::Method2 { &func_info(*m_data, *func), cinfo->cls } };
     }
 
     // Look up the entry in the normal method family table and use
@@ -28579,8 +29069,13 @@ res::Func AnalysisIndex::resolve_method(const Type& thisType,
         auto const func = func_from_meth_ref(*m_data, e.m_regular);
         if (!func) return general(cinfo->name, false);
         return entry->m_regularIncomplete
-          ? Func { Func::MethodOrMissing2 { &func_info(*m_data, *func) } }
-          : Func { Func::Method2 { &func_info(*m_data, *func) } };
+          ? Func {
+              Func::MethodOrMissing2 {
+                &func_info(*m_data, *func),
+                cinfo->cls
+              }
+            }
+          : Func { Func::Method2 { &func_info(*m_data, *func), cinfo->cls } };
       },
       [&] (const FuncFamilyEntry::FFAndNone&) {
         assertx(includeNonRegular);
@@ -28593,8 +29088,13 @@ res::Func AnalysisIndex::resolve_method(const Type& thisType,
         return
           ((includeNonRegular && entry->m_allIncomplete) ||
            (!includeNonRegular && entry->m_regularIncomplete))
-          ? Func { Func::MethodOrMissing2 { &func_info(*m_data, *func) } }
-          : Func { Func::Method2 { &func_info(*m_data, *func) } };
+          ? Func {
+              Func::MethodOrMissing2 {
+                &func_info(*m_data, *func),
+                cinfo->cls
+              }
+            }
+          : Func { Func::Method2 { &func_info(*m_data, *func), cinfo->cls } };
       },
       [&] (const FuncFamilyEntry::SingleAndNone& e) {
         assertx(includeNonRegular);
@@ -28602,8 +29102,13 @@ res::Func AnalysisIndex::resolve_method(const Type& thisType,
         auto const func = func_from_meth_ref(*m_data, e.m_all);
         if (!func) return general(cinfo->name, true);
         return entry->m_allIncomplete
-          ? Func { Func::MethodOrMissing2 { &func_info(*m_data, *func) } }
-          : Func { Func::Method2 { &func_info(*m_data, *func) } };
+          ? Func {
+              Func::MethodOrMissing2 {
+                &func_info(*m_data, *func),
+                cinfo->cls
+              }
+            }
+          : Func { Func::Method2 { &func_info(*m_data, *func), cinfo->cls } };
       },
       [&] (const FuncFamilyEntry::None&) -> Func {
         always_assert(false);
@@ -28637,7 +29142,7 @@ res::Func AnalysisIndex::resolve_method(const Type& thisType,
       if (meth && (meth->attrs & AttrPrivate) && meth->topLevel()) {
         if (auto const func = func_from_meth_ref(*m_data, meth->meth())) {
           m_data->deps->add(meth->meth());
-          return Func { Func::Method2 { &func_info(*m_data, *func) } };
+          return Func { Func::Method2 { &func_info(*m_data, *func), ctx.cls } };
         }
       }
     }
@@ -28706,7 +29211,7 @@ res::Func AnalysisIndex::resolve_ctor(const Type& obj) const {
             Func::MissingMethod { cinfo->name, s_construct.get() }
           };
         }
-        return Func { Func::Method2 { &func_info(*m_data, *func) } };
+        return Func { Func::Method2 { &func_info(*m_data, *func), cinfo->cls } };
       }
 
       // Look up the entry in the normal method family table and use
@@ -28739,8 +29244,13 @@ res::Func AnalysisIndex::resolve_ctor(const Type& obj) const {
             };
           }
           return entry->m_regularIncomplete
-            ? Func { Func::MethodOrMissing2 { &func_info(*m_data, *func) } }
-            : Func { Func::Method2 { &func_info(*m_data, *func) } };
+            ? Func {
+                Func::MethodOrMissing2 {
+                  &func_info(*m_data, *func),
+                  cinfo->cls
+                }
+              }
+            : Func { Func::Method2 { &func_info(*m_data, *func), cinfo->cls } };
         },
         [&] (const FuncFamilyEntry::FFAndNone&) {
           assertx(includeNonRegular);
@@ -28759,8 +29269,13 @@ res::Func AnalysisIndex::resolve_ctor(const Type& obj) const {
           return
             ((includeNonRegular && entry->m_allIncomplete) ||
              (!includeNonRegular && entry->m_regularIncomplete))
-            ? Func { Func::MethodOrMissing2 { &func_info(*m_data, *func) } }
-            : Func { Func::Method2 { &func_info(*m_data, *func) } };
+            ? Func {
+                Func::MethodOrMissing2 {
+                  &func_info(*m_data, *func),
+                  cinfo->cls
+                }
+              }
+            : Func { Func::Method2 { &func_info(*m_data, *func), cinfo->cls } };
         },
         [&] (const FuncFamilyEntry::SingleAndNone& e) {
           assertx(includeNonRegular);
@@ -28772,8 +29287,13 @@ res::Func AnalysisIndex::resolve_ctor(const Type& obj) const {
             };
           }
           return entry->m_allIncomplete
-            ? Func { Func::MethodOrMissing2 { &func_info(*m_data, *func) } }
-            : Func { Func::Method2 { &func_info(*m_data, *func) } };
+            ? Func {
+                Func::MethodOrMissing2 {
+                  &func_info(*m_data, *func),
+                  cinfo->cls
+                }
+              }
+            : Func { Func::Method2 { &func_info(*m_data, *func), cinfo->cls } };
         },
         [&] (const FuncFamilyEntry::None&) -> Func {
           always_assert(false);
@@ -30031,6 +30551,31 @@ std::pair<Index::ReturnType, size_t>
 AnalysisIndexAdaptor::lookup_return_type_raw(const php::Func* f) const {
   return index.lookup_return_type_raw(*f);
 }
+
+Index::EffectiveReturnTypeInfo
+AnalysisIndexAdaptor::lookup_effective_return_type_info(
+  Context ctx,
+  const php::Func& func
+) const {
+  return index.lookup_effective_return_type_info(ctx, func);
+}
+
+const TypeIntersectionConstraint&
+AnalysisIndexAdaptor::lookup_return_type_constraints(
+  Context ctx,
+  const php::Func& func
+) const {
+  return index.lookup_return_type_constraints(ctx, func);
+}
+
+VerifyRetKind AnalysisIndexAdaptor::lookup_return_type_check_kind(
+  Context ctx,
+  const php::Func& func,
+  VerifyRetKind bytecodeKind
+) const {
+  return index.lookup_return_type_check_kind(ctx, func, bytecodeKind);
+}
+
 CompactVector<Type>
 AnalysisIndexAdaptor::lookup_closure_use_vars(const php::Func& f) const {
   return index.lookup_closure_use_vars(f);
