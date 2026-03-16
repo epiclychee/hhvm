@@ -34,6 +34,7 @@
 #include "hphp/runtime/base/repo-auth-type.h"
 
 #include "hphp/runtime/vm/coeffects.h"
+#include "hphp/runtime/vm/hhbc-shared.h"
 #include "hphp/runtime/vm/type-constraint.h"
 
 #include "hphp/hhbbc/hhbbc.h"
@@ -930,17 +931,21 @@ private:
   };
   struct Method {
     const FuncInfo* finfo;
+    const php::Class* contextCls{nullptr};
   };
   struct Method2 {
     const FuncInfo2* finfo;
+    const php::Class* contextCls{nullptr};
   };
   // Like Method, but the method is not guaranteed to actually exist
   // (this only matters for things like exactFunc()).
   struct MethodOrMissing {
     const FuncInfo* finfo;
+    const php::Class* contextCls{nullptr};
   };
   struct MethodOrMissing2 {
     const FuncInfo2* finfo;
+    const php::Class* contextCls{nullptr};
   };
   // Method/Func is known to not exist
   struct MissingFunc {
@@ -1419,6 +1424,12 @@ struct Index {
     }
   };
 
+  struct EffectiveReturnTypeInfo {
+    const TypeIntersectionConstraint& constraints;
+    VerifyRetKind kind;
+    bool hasInherited;
+  };
+
   /*
    * If func is effect-free when called with args, and it returns a constant,
    * return that constant; otherwise return TInitCell.
@@ -1460,6 +1471,17 @@ struct Index {
    * but concurrent readers are allowed.
    */
   std::pair<ReturnType, size_t> lookup_return_type_raw(const php::Func*) const;
+
+  EffectiveReturnTypeInfo
+  lookup_effective_return_type_info(Context, const php::Func&) const;
+
+  const TypeIntersectionConstraint&
+  lookup_return_type_constraints(Context, const php::Func&) const;
+
+  VerifyRetKind
+  lookup_return_type_check_kind(Context,
+                                const php::Func&,
+                                VerifyRetKind bytecodeKind) const;
 
   /*
    * Return the best known types of a closure's used variables (on
@@ -1797,6 +1819,17 @@ struct IIndex {
   virtual std::pair<Index::ReturnType, size_t>
   lookup_return_type_raw(const php::Func*) const = 0;
 
+  virtual Index::EffectiveReturnTypeInfo
+  lookup_effective_return_type_info(Context, const php::Func&) const = 0;
+
+  virtual const TypeIntersectionConstraint&
+  lookup_return_type_constraints(Context, const php::Func&) const = 0;
+
+  virtual VerifyRetKind
+  lookup_return_type_check_kind(Context,
+                                const php::Func&,
+                                VerifyRetKind bytecodeKind) const = 0;
+
   virtual CompactVector<Type>
   lookup_closure_use_vars(const php::Func&) const = 0;
   virtual CompactVector<Type>
@@ -2010,6 +2043,22 @@ struct IndexAdaptor : public IIndex {
   std::pair<Index::ReturnType, size_t>
   lookup_return_type_raw(const php::Func* f) const override {
     return index.lookup_return_type_raw(f);
+  }
+  Index::EffectiveReturnTypeInfo
+  lookup_effective_return_type_info(Context c,
+                                    const php::Func& f) const override {
+    return index.lookup_effective_return_type_info(c, f);
+  }
+  const TypeIntersectionConstraint&
+  lookup_return_type_constraints(Context c,
+                                 const php::Func& f) const override {
+    return index.lookup_return_type_constraints(c, f);
+  }
+  VerifyRetKind
+  lookup_return_type_check_kind(Context c,
+                                const php::Func& f,
+                                VerifyRetKind b) const override {
+    return index.lookup_return_type_check_kind(c, f, b);
   }
   CompactVector<Type>
   lookup_closure_use_vars(const php::Func& f) const override {
@@ -2931,6 +2980,17 @@ struct AnalysisIndex {
   std::pair<Index::ReturnType, size_t>
   lookup_return_type_raw(const php::Func& f) const;
 
+  Index::EffectiveReturnTypeInfo
+  lookup_effective_return_type_info(Context, const php::Func&) const;
+
+  const TypeIntersectionConstraint&
+  lookup_return_type_constraints(Context, const php::Func&) const;
+
+  VerifyRetKind
+  lookup_return_type_check_kind(Context,
+                                const php::Func&,
+                                VerifyRetKind bytecodeKind) const;
+
   CompactVector<Type> lookup_closure_use_vars(const php::Func&) const;
   CompactVector<Type> lookup_closure_use_vars_raw(const php::Func&) const;
 
@@ -3088,6 +3148,19 @@ struct AnalysisIndexAdaptor : public IIndex {
 
   std::pair<Index::ReturnType, size_t>
   lookup_return_type_raw(const php::Func*) const override;
+
+  Index::EffectiveReturnTypeInfo
+  lookup_effective_return_type_info(Context,
+                                    const php::Func&) const override;
+
+  const TypeIntersectionConstraint&
+  lookup_return_type_constraints(Context,
+                                 const php::Func&) const override;
+
+  VerifyRetKind
+  lookup_return_type_check_kind(Context,
+                                const php::Func&,
+                                VerifyRetKind bytecodeKind) const override;
 
   CompactVector<Type>
   lookup_closure_use_vars(const php::Func&) const override;

@@ -555,7 +555,8 @@ res::Class builtin_class(const IIndex&, SString);
 Type return_type_from_constraints(
   const php::Func& f,
   const std::function<Optional<res::Class>(SString)>& resolve,
-  const std::function<Optional<Type>()>& self
+  const std::function<Optional<Type>()>& self,
+  const TypeIntersectionConstraint* constraints = nullptr
 );
 
 //////////////////////////////////////////////////////////////////////
