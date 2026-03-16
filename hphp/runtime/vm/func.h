@@ -1888,8 +1888,7 @@ private:
   bool m_shouldSampleJit : 1;
   bool m_hasForeignThis : 1;
   bool m_registeredInDataMap : 1;
-  bool m_hasMonotonicInheritedReturnTypeChecks : 1;
-  // 2 free bits, and there are some more in AtomicFlags.
+  // 3 free bits, and there are some more in AtomicFlags.
 
   // Number of times the function has been considered in `shouldTranslate()`
   // when Eval.JitLiveThreshold or Eval.JitProfileThreshold is set. The counter
