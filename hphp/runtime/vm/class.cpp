@@ -2104,6 +2104,79 @@ void checkDeclarationCompat(const PreClass* preClass,
   );
 }
 
+TypeConstraint normalizeInheritedReturnConstraint(
+  TypeConstraint tc,
+  int mode
+) {
+  tc.addFlags(TypeConstraintFlags::Inherited);
+  if (mode == 1) {
+    // Monotonic mode 1 enforces inherited contracts as soft.
+    tc.addFlags(TypeConstraintFlags::Soft);
+  } else if (mode == 2) {
+    // Monotonic mode 2 enforces inherited contracts as hard.
+    tc.removeFlags(TypeConstraintFlags::Soft);
+  }
+  return tc;
+}
+
+TypeConstraint canonicalMonotonicConstraint(TypeConstraint tc) {
+  tc.removeFlags(
+    TypeConstraintFlags::Inherited |
+    TypeConstraintFlags::Soft |
+    TypeConstraintFlags::SingleTypeConstraint
+  );
+  return tc;
+}
+
+bool equivalentMonotonicConstraint(
+  const TypeConstraint& a,
+  const TypeConstraint& b
+) {
+  return canonicalMonotonicConstraint(a) == canonicalMonotonicConstraint(b);
+}
+
+bool appendMonotonicConstraint(
+  std::vector<TypeConstraint>& out,
+  TypeConstraint tc
+) {
+  for (auto& existing : out) {
+    if (!equivalentMonotonicConstraint(existing, tc)) continue;
+    if (existing.isSoft() && !tc.isSoft()) {
+      existing.removeFlags(TypeConstraintFlags::Soft);
+      if (tc.isInherited()) {
+        existing.addFlags(TypeConstraintFlags::Inherited);
+      }
+      return tc.isInherited();
+    }
+    return false;
+  }
+  out.emplace_back(std::move(tc));
+  return tc.isInherited();
+}
+
+bool asyncCompatibleForMonotonicReturn(const Func* impl, const Func* decl) {
+  /*
+   * Compatibility matrix for monotonic inherited return normalization:
+   * - async overrides async: included
+   * - non-async overrides non-async: included
+   * - async/non-async mismatch in either direction: ignored for monotonic
+   *   inherited enforcement
+   */
+  return impl->isAsyncFunction() == decl->isAsyncFunction();
+}
+
+VerifyRetKind monotonicReturnCheckKind(
+  const std::vector<TypeConstraint>& constraints
+) {
+  auto hasCheckable = false;
+  for (auto const& tc : constraints) {
+    if (!tc.isCheckable()) continue;
+    hasCheckable = true;
+    break;
+  }
+  return hasCheckable ? VerifyRetKind::All : VerifyRetKind::None;
+}
+
 } // namespace
 
 Class::Class(PreClass* preClass, Class* parent,
@@ -2148,6 +2221,7 @@ Class::Class(PreClass* preClass, Class* parent,
   setSpecial();       // must run before setRTAttributes
   setRTAttributes();
   setInterfaces();
+  setMonotonicReturnTypeHints();
   setEnumType();
   setIncludedEnums();
   setConstants();
@@ -2367,11 +2441,80 @@ void Class::setMethods() {
     }
   }
 
+  if (Cfg::Eval::MonotonicInheritedReturnTypeHints > 0) {
+    /*
+     * Under monotonic inherited return enforcement, each concrete class keeps
+     * an independent Func instance for inherited methods so class-specific
+     * effective return contracts cannot leak across classes.
+     */
+    for (Slot i = 0; i < builder.size(); ++i) {
+      auto const inherited = builder[i];
+      if (inherited->cls() == this) continue;
+      auto const implCls = inherited->cls();
+      auto const cloned = inherited->clone(this);
+      cloned->rescope(implCls);
+      builder[i] = cloned;
+    }
+  }
+
   builder.create(m_methods);
   for (Slot i = 0; i < builder.size(); ++i) {
     builder[i]->setMethodSlot(i);
   }
   setFuncVec(builder);
+}
+
+void Class::setMonotonicReturnTypeHints() {
+  auto const mode = Cfg::Eval::MonotonicInheritedReturnTypeHints;
+  if (mode <= 0) return;
+
+  for (Slot i = 0; i < m_methods.size(); ++i) {
+    auto const method = getMethod(i);
+    always_assert(method);
+    method->clearMonotonicReturnTypeInfo();
+
+    std::vector<TypeConstraint> effectiveConstraints;
+    if (!method->returnTypeConstraints().isTop()) {
+      auto const direct = method->returnTypeConstraints().range();
+      effectiveConstraints.reserve(direct.size());
+      for (auto const& tc : direct) {
+        effectiveConstraints.emplace_back(tc);
+      }
+    }
+
+    auto hasInheritedChecks = false;
+    hphp_fast_set<const Func*> seenAncestors;
+    auto const addInheritedFrom = [&](const Func* ancestor) {
+      if (!ancestor) return;
+      if (!seenAncestors.emplace(ancestor).second) return;
+      if (!asyncCompatibleForMonotonicReturn(method, ancestor)) return;
+      if (ancestor->returnTypeConstraints().isTop()) return;
+
+      for (auto const& tc : ancestor->returnTypeConstraints().range()) {
+        hasInheritedChecks |= appendMonotonicConstraint(
+          effectiveConstraints,
+          normalizeInheritedReturnConstraint(tc, mode)
+        );
+      }
+    };
+
+    for (auto current = m_parent.get(); current; current = current->m_parent.get()) {
+      addInheritedFrom(current->lookupMethod(method->name()));
+    }
+    for (auto const& iface : m_interfaces.range()) {
+      addInheritedFrom(iface->lookupMethod(method->name()));
+    }
+
+    if (!hasInheritedChecks) continue;
+    auto const kind = monotonicReturnCheckKind(effectiveConstraints);
+    method->setMonotonicReturnTypeInfo(
+      Func::MonotonicReturnTypeInfo {
+        TypeIntersectionConstraint(std::move(effectiveConstraints)),
+        kind,
+        true
+      }
+    );
+  }
 }
 
 /*
