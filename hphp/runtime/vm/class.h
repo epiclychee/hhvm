@@ -1813,6 +1813,7 @@ private:
   void setParent();
   void setSpecial();
   void setMethods();
+  void setMonotonicReturnTypeHints();
   void setRTAttributes();
   void setConstants();
   void setProperties();

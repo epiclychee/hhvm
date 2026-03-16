@@ -113,7 +113,9 @@ Func::Func(Unit& unit, const StringData* name, Attr attrs)
   , m_shouldSampleJit(StructuredLog::coinflip(Cfg::Jit::SampleRate))
   , m_hasForeignThis(false)
   , m_registeredInDataMap(false)
+  , m_hasMonotonicInheritedReturnTypeChecks(false)
   , m_unit(&unit)
+  , m_monotonicReturnTypeInfo(nullptr)
   , m_shared(nullptr)
   , m_attrs(attrs)
 {
@@ -128,7 +130,9 @@ Func::Func(
   , m_shouldSampleJit(StructuredLog::coinflip(Cfg::Jit::SampleRate))
   , m_hasForeignThis(false)
   , m_registeredInDataMap(false)
+  , m_hasMonotonicInheritedReturnTypeChecks(false)
   , m_unit(&unit)
+  , m_monotonicReturnTypeInfo(nullptr)
   , m_shared(nullptr)
   , m_attrs(attrs)
 {
@@ -139,6 +143,10 @@ Func::Func(
 }
 
 Func::~Func() {
+  if (m_monotonicReturnTypeInfo) {
+    delete m_monotonicReturnTypeInfo;
+    m_monotonicReturnTypeInfo = nullptr;
+  }
   // Should've deregistered in Func::destroy() or Func::freeClone()
   assertx(!m_registeredInDataMap);
 #ifndef NDEBUG
@@ -210,6 +218,7 @@ void Func::freeClone() {
   }
 #endif
 
+  clearMonotonicReturnTypeInfo();
   m_cloned.flag.clear();
 }
 
@@ -236,6 +245,8 @@ Func* Func::clone(Class* cls, const StringData* name) const {
   if (f != this) {
     f->m_isPreFunc = false;
     f->m_registeredInDataMap = false;
+    f->m_hasMonotonicInheritedReturnTypeChecks = false;
+    f->m_monotonicReturnTypeInfo = nullptr;
   }
 
 #ifndef USE_LOWPTR
@@ -244,6 +255,27 @@ Func* Func::clone(Class* cls, const StringData* name) const {
   f->setNewFuncId();
   f->atomicFlags().unset(Func::Flags::Zombie);
   return f;
+}
+
+void Func::setMonotonicReturnTypeInfo(MonotonicReturnTypeInfo info) {
+  if (m_monotonicReturnTypeInfo) {
+    delete m_monotonicReturnTypeInfo;
+    m_monotonicReturnTypeInfo = nullptr;
+  }
+  if (!info.hasInherited) {
+    m_hasMonotonicInheritedReturnTypeChecks = false;
+    return;
+  }
+  m_monotonicReturnTypeInfo = new MonotonicReturnTypeInfo(std::move(info));
+  m_hasMonotonicInheritedReturnTypeChecks = true;
+}
+
+void Func::clearMonotonicReturnTypeInfo() {
+  if (m_monotonicReturnTypeInfo) {
+    delete m_monotonicReturnTypeInfo;
+    m_monotonicReturnTypeInfo = nullptr;
+  }
+  m_hasMonotonicInheritedReturnTypeChecks = false;
 }
 
 void Func::rescope(Class* ctx) {
@@ -658,6 +690,16 @@ void Func::prettyPrint(std::ostream& out, const PrintOpts& opts) const {
       }
       if (returnUserType() && !returnUserType()->empty()) {
         out << " (" << returnUserType()->data() << ")";
+      }
+      out << std::endl;
+    }
+
+    if (hasMonotonicInheritedReturnTypeChecks()) {
+      out << " RetEffective: ";
+      for (auto const& tc : effectiveReturnTypeConstraints().range()) {
+        if (!tc.hasConstraint()) continue;
+        out << " " << tc.displayName(cls(), true);
+        if (tc.isInherited()) out << " [inherited]";
       }
       out << std::endl;
     }

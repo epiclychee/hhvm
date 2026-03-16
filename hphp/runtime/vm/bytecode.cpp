@@ -2176,9 +2176,10 @@ namespace {
 
 OPTBLD_INLINE void verifyRetTypeImpl(size_t ind, HPHP::VerifyRetKind kind) {
   auto const func = vmfp()->func();
-  auto const& constraints = func->returnTypeConstraints();
+  auto const& constraints = func->effectiveReturnTypeConstraints();
+  auto const effectiveKind = func->effectiveReturnTypeCheckKind(kind);
   auto const& retVal = vmStack().indC(ind);
-  switch (kind) {
+  switch (effectiveKind) {
     case HPHP::VerifyRetKind::None:
       break;
     case HPHP::VerifyRetKind::NonNull:
