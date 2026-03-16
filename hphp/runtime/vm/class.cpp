@@ -2168,13 +2168,10 @@ bool asyncCompatibleForMonotonicReturn(const Func* impl, const Func* decl) {
 VerifyRetKind monotonicReturnCheckKind(
   const std::vector<TypeConstraint>& constraints
 ) {
-  auto hasCheckable = false;
   for (auto const& tc : constraints) {
-    if (!tc.isCheckable()) continue;
-    hasCheckable = true;
-    break;
+    if (tc.isCheckable()) return VerifyRetKind::All;
   }
-  return hasCheckable ? VerifyRetKind::All : VerifyRetKind::None;
+  return VerifyRetKind::None;
 }
 
 } // namespace
@@ -2450,10 +2447,7 @@ void Class::setMethods() {
     for (Slot i = 0; i < builder.size(); ++i) {
       auto const inherited = builder[i];
       if (inherited->cls() == this) continue;
-      auto const implCls = inherited->cls();
-      auto const cloned = inherited->clone(this);
-      cloned->rescope(implCls);
-      builder[i] = cloned;
+      builder[i] = inherited->clone(inherited->cls());
     }
   }
 

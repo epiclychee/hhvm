@@ -19506,7 +19506,7 @@ void make_class_infos_local(
         cinfo->methodFamilies.shrink_to_fit();
         cinfo->methodFamiliesAux.shrink_to_fit();
 
-        if (!rcinfo->monotonicReturnTypes.empty()) {
+        {
           std::vector<std::pair<SString, MonotonicReturnTypeInfo>> mono;
           mono.reserve(rcinfo->monotonicReturnTypes.size());
           for (auto& [name, info] : rcinfo->monotonicReturnTypes) {
@@ -28487,13 +28487,13 @@ AnalysisIndex::lookup_effective_return_type_info(Context ctx,
                                                  const php::Func& func) const {
   auto const info = monotonic_return_type_info(*m_data, ctx.cls, func);
   if (info) {
-    return EffectiveReturnTypeInfo{
+    return Index::EffectiveReturnTypeInfo{
       info->constraints,
       info->kind,
       info->hasInherited
     };
   }
-  return EffectiveReturnTypeInfo{
+  return Index::EffectiveReturnTypeInfo{
     func.retTypeConstraints,
     directReturnCheckKind(func),
     false

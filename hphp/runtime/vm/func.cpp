@@ -113,7 +113,6 @@ Func::Func(Unit& unit, const StringData* name, Attr attrs)
   , m_shouldSampleJit(StructuredLog::coinflip(Cfg::Jit::SampleRate))
   , m_hasForeignThis(false)
   , m_registeredInDataMap(false)
-  , m_hasMonotonicInheritedReturnTypeChecks(false)
   , m_unit(&unit)
   , m_monotonicReturnTypeInfo(nullptr)
   , m_shared(nullptr)
@@ -130,7 +129,6 @@ Func::Func(
   , m_shouldSampleJit(StructuredLog::coinflip(Cfg::Jit::SampleRate))
   , m_hasForeignThis(false)
   , m_registeredInDataMap(false)
-  , m_hasMonotonicInheritedReturnTypeChecks(false)
   , m_unit(&unit)
   , m_monotonicReturnTypeInfo(nullptr)
   , m_shared(nullptr)
@@ -245,7 +243,6 @@ Func* Func::clone(Class* cls, const StringData* name) const {
   if (f != this) {
     f->m_isPreFunc = false;
     f->m_registeredInDataMap = false;
-    f->m_hasMonotonicInheritedReturnTypeChecks = false;
     f->m_monotonicReturnTypeInfo = nullptr;
   }
 
@@ -258,24 +255,15 @@ Func* Func::clone(Class* cls, const StringData* name) const {
 }
 
 void Func::setMonotonicReturnTypeInfo(MonotonicReturnTypeInfo info) {
-  if (m_monotonicReturnTypeInfo) {
-    delete m_monotonicReturnTypeInfo;
-    m_monotonicReturnTypeInfo = nullptr;
-  }
-  if (!info.hasInherited) {
-    m_hasMonotonicInheritedReturnTypeChecks = false;
-    return;
-  }
+  delete m_monotonicReturnTypeInfo;
+  m_monotonicReturnTypeInfo = nullptr;
+  if (!info.hasInherited) return;
   m_monotonicReturnTypeInfo = new MonotonicReturnTypeInfo(std::move(info));
-  m_hasMonotonicInheritedReturnTypeChecks = true;
 }
 
 void Func::clearMonotonicReturnTypeInfo() {
-  if (m_monotonicReturnTypeInfo) {
-    delete m_monotonicReturnTypeInfo;
-    m_monotonicReturnTypeInfo = nullptr;
-  }
-  m_hasMonotonicInheritedReturnTypeChecks = false;
+  delete m_monotonicReturnTypeInfo;
+  m_monotonicReturnTypeInfo = nullptr;
 }
 
 void Func::rescope(Class* ctx) {

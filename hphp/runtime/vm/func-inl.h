@@ -386,9 +386,7 @@ Func::effectiveReturnTypeConstraints() const {
 
 inline VerifyRetKind
 Func::effectiveReturnTypeCheckKind(VerifyRetKind bytecodeKind) const {
-  if (!m_hasMonotonicInheritedReturnTypeChecks || !m_monotonicReturnTypeInfo) {
-    return bytecodeKind;
-  }
+  if (!m_monotonicReturnTypeInfo) return bytecodeKind;
   auto const inheritedKind = m_monotonicReturnTypeInfo->kind;
   if (bytecodeKind == VerifyRetKind::All || inheritedKind == VerifyRetKind::All) {
     return VerifyRetKind::All;
@@ -403,7 +401,7 @@ Func::effectiveReturnTypeCheckKind(VerifyRetKind bytecodeKind) const {
 }
 
 inline bool Func::hasMonotonicInheritedReturnTypeChecks() const {
-  return m_hasMonotonicInheritedReturnTypeChecks;
+  return m_monotonicReturnTypeInfo != nullptr;
 }
 
 inline const StringData* Func::returnUserType() const {
