@@ -398,10 +398,18 @@ struct VerifyResult {
   bool coerced;
 };
 
+bool keepMonotonicReturnChecks(const ISS& env) {
+  return
+    Cfg::Eval::MonotonicInheritedReturnTypeHints > 0 &&
+    env.ctx.cls != nullptr;
+}
+
 template<typename TOp>
 Optional<VerifyResult> verifyRetNonNullImpl(ISS& env, const TOp& op, const Type& retTy) {
   if (!retTy.couldBe(BInitNull)) {
-    reduceRet(env, op, VerifyRetKind::None);
+    if (!keepMonotonicReturnChecks(env)) {
+      reduceRet(env, op, VerifyRetKind::None);
+    }
     return std::nullopt;
   }
   auto const& constraints = env.ctx.func->retTypeConstraints;
@@ -478,7 +486,9 @@ Optional<VerifyResult> verifyRetAllImpl(ISS& env, const TypeIntersectionConstrai
   if (remove) {
     assertx(effectFree);
     assertx(!coerced);
-    reduceRet(env, op, VerifyRetKind::None);
+    if (!keepMonotonicReturnChecks(env)) {
+      reduceRet(env, op, VerifyRetKind::None);
+    }
     return std::nullopt;
   }
 
@@ -486,7 +496,9 @@ Optional<VerifyResult> verifyRetAllImpl(ISS& env, const TypeIntersectionConstrai
   // type-constraint if it was not InitNull, we can lower to a
   // non-null check.
   if (nullonly) {
-    reduceRet(env, op, VerifyRetKind::NonNull);
+    if (!keepMonotonicReturnChecks(env)) {
+      reduceRet(env, op, VerifyRetKind::NonNull);
+    }
     return std::nullopt;
   }
 
@@ -501,7 +513,7 @@ Optional<VerifyResult> verifyRetImpl(ISS& env, HPHP::VerifyRetKind kind, const O
     case HPHP::VerifyRetKind::NonNull:
       return verifyRetNonNullImpl(env, op, type);
     case HPHP::VerifyRetKind::None:
-      return VerifyResult(type, true, false);
+      return VerifyResult(type, !keepMonotonicReturnChecks(env), false);
   }
 }
 
